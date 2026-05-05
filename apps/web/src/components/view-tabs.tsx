@@ -39,16 +39,16 @@ export const VIEW_OPTIONS: ViewOption[] = [
     label:    'אישי',
     icon:     UserIcon,
     helpText: 'חשבונות פרטיים בלבד',
-    activeClass: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200',
-    stripeClass: 'bg-blue-300/70 dark:bg-blue-700/60',
+    activeClass: 'bg-blue-200 text-blue-900 dark:bg-blue-900/60 dark:text-blue-100',
+    stripeClass: 'bg-blue-400 dark:bg-blue-600',
   },
   {
     value:    'business',
     label:    'עסקי',
     icon:     Briefcase,
     helpText: 'חשבונות עסקיים בלבד',
-    activeClass: 'bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200',
-    stripeClass: 'bg-slate-400/70 dark:bg-slate-500/60',
+    activeClass: 'bg-slate-300 text-slate-900 dark:bg-slate-600 dark:text-slate-100',
+    stripeClass: 'bg-slate-500 dark:bg-slate-400',
   },
   {
     value:    'combined',
@@ -56,7 +56,7 @@ export const VIEW_OPTIONS: ViewOption[] = [
     icon:     Users,
     helpText: 'הכל ביחד, ללא ספירה כפולה של העברות',
     activeClass: 'bg-primary-soft text-primary',
-    stripeClass: 'bg-primary/40',
+    stripeClass: 'bg-primary/70',
   },
 ];
 
@@ -102,14 +102,26 @@ export function ViewTabs({
   );
 }
 
-/** 2px colored strip rendered at the top of a page's content area to
- *  reinforce which view is active. Color matches the active tab. */
+/** Colored strip rendered at the top of a page's content area to reinforce
+ *  which view is active. Color matches the active tab. Uses negative margins
+ *  to extend to the edges of the content area (full-bleed) and pull up
+ *  flush with the global header — otherwise it's buried under the page's
+ *  vertical padding and easy to miss. */
 export function ViewStripe({ view }: { view: View }) {
   const opt = getViewOption(view);
   return (
     <div
       aria-hidden="true"
-      className={cn('h-0.5 w-full rounded-full', opt.stripeClass)}
+      className={cn(
+        // Full-bleed: cancel the layout's px-4 / md:px-6 / lg:px-8.
+        '-mx-4 md:-mx-6 lg:-mx-8',
+        // Pull flush with the global header by cancelling the layout's top
+        // padding. Parent's space-y-6 will handle the gap to the next sibling.
+        '-mt-5 md:-mt-8',
+        // Visible: 4px tall.
+        'h-1 w-full',
+        opt.stripeClass,
+      )}
     />
   );
 }
