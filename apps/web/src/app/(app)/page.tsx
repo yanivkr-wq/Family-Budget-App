@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { CategoryDonutLazy as CategoryDonut } from '@/components/ui/category-donut-lazy';
 import { DashboardTransactionsSection } from './dashboard-transactions-section';
 import type { DashboardTx } from './dashboard-transactions-section';
+import { InsightDetailsToggle } from './dashboard-insight-details';
 import {
   Wallet,
   TrendingDown,
@@ -380,6 +381,8 @@ export default async function DashboardPage(props: {
     totalIncome,
     isCurrentMonth,
     day,
+    daysInMonth,
+    daysLeft,
     month,
     spent,
   });
@@ -734,6 +737,9 @@ interface Insight {
   icon: LucideIcon;
   title: string;
   body: string;
+  /** Plain-language calculation/reasoning shown when the user clicks the
+   *  "info" button on the row. Multi-line via \n. */
+  explanation?: string;
   href?: string;
 }
 
@@ -749,14 +755,19 @@ function computeInsights(args: {
   totalIncome:              number;
   isCurrentMonth:           boolean;
   day:                      number;
+  daysInMonth:              number;
+  daysLeft:                 number;
   month:                    string;
   spent:                    number;
 }): Insight[] {
   const {
     budgetRows, prevTotals, endingPlans, activeInstallmentPlans,
     projectedEom, hasEnoughDataForProjection, totalIncome,
-    isCurrentMonth, day, month, spent,
+    isCurrentMonth, day, daysInMonth, daysLeft, month, spent,
   } = args;
+
+  // Helper to format ILS without decimals — used a lot in explanations below.
+  const ils = (n: number) => formatIls(n, { decimals: false });
 
   const insights: Insight[] = [];
 
@@ -769,7 +780,12 @@ function computeInsights(args: {
         severity: 'critical',
         icon: AlertOctagon,
         title: `${cat.nameHe} — חרגת מהתקציב`,
-        body: `הוצאת ${formatIls(actual, { decimals: false })} מתוך ${formatIls(target, { decimals: false })} (${formatIls(over, { decimals: false })} מעל)`,
+        body: `הוצאת ${ils(actual)} מתוך ${ils(target)} (${ils(over)} מעל)`,
+        explanation:
+          `סכמתי את כל העסקאות החודש (חודש החיוב ${month}) שמסווגות תחת הקטגוריה "${cat.nameHe}".\n` +
+          `סך כל ההוצאה החודש: ${ils(actual)}.\n` +
+          `התקציב החודשי שהגדרת לקטגוריה הזו: ${ils(target)}.\n` +
+          `${ils(actual)} − ${ils(target)} = חריגה של ${ils(over)}.`,
         href: `/transactions?month=${month}`,
       });
     }
@@ -777,12 +793,26 @@ function computeInsights(args: {
 
   // ② Projected negative month-end balance
   if (isCurrentMonth && hasEnoughDataForProjection && projectedEom < 0) {
+    const dailyAvg = day > 0 ? spent / day : 0;
+    const projectedExtra = dailyAvg * daysLeft;
     insights.push({
       id: 'projected-negative',
       severity: 'critical',
       icon: TrendingDown,
       title: 'תחזית סוף חודש שלילית',
-      body: `לפי קצב ההוצאות הנוכחי, הסוף חודש צפוי להיות ${formatIls(projectedEom, { decimals: false })}`,
+      body: `לפי קצב ההוצאות הנוכחי, הסוף חודש צפוי להיות ${ils(projectedEom)}`,
+      explanation:
+        `התחזית מבוססת על קצב ההוצאות עד עכשיו, מוקרנת לסוף החודש.\n` +
+        `\n` +
+        `• היום: יום ${day} מתוך ${daysInMonth} (${daysLeft} ימים נותרו)\n` +
+        `• הוצאות עד כה: ${ils(spent)}\n` +
+        `• ממוצע יומי: ${ils(spent)} ÷ ${day} = ${ils(dailyAvg)} ליום\n` +
+        `• הוצאה צפויה עד סוף החודש: ${ils(dailyAvg)} × ${daysLeft} = ${ils(projectedExtra)}\n` +
+        `• הכנסות שנרשמו החודש: ${ils(totalIncome)}\n` +
+        `\n` +
+        `חישוב: ${ils(totalIncome)} − (${ils(spent)} + ${ils(projectedExtra)}) = ${ils(projectedEom)}\n` +
+        `\n` +
+        `שים לב — זוהי הקרנה לינארית פשוטה. אם יש הוצאות גדולות שכבר חלפו (כמו ארנונה ביום הראשון), התחזית עלולה להיות פסימית מדי. בעתיד נשפר את החישוב כדי להבחין בין הוצאות חוזרות לבין הוצאות חד-פעמיות.`,
     });
   }
 
@@ -796,7 +826,15 @@ function computeInsights(args: {
           severity: 'warning',
           icon: AlertTriangle,
           title: `${cat.nameHe} — ${Math.round(pct)}% מהתקציב`,
-          body: `נותר ${formatIls(target - actual, { decimals: false })} מתקציב ${formatIls(target, { decimals: false })}`,
+          body: `נותר ${ils(target - actual)} מתקציב ${ils(target)}`,
+          explanation:
+            `סכמתי את העסקאות בקטגוריה "${cat.nameHe}" עבור חודש החיוב ${month}.\n` +
+            `סך הוצאות עד כה: ${ils(actual)}.\n` +
+            `תקציב חודשי: ${ils(target)}.\n` +
+            `${ils(actual)} ÷ ${ils(target)} = ${Math.round(pct)}%.\n` +
+            `נותר ${ils(target - actual)} עד סוף החודש.\n` +
+            `\n` +
+            `התראה זו נדלקת בין 80%-99% מהתקציב, כדי שתספיק לתכנן לפני חריגה.`,
           href: `/transactions?month=${month}`,
         });
       }
@@ -819,7 +857,15 @@ function computeInsights(args: {
           severity: 'warning',
           icon: TrendingUp,
           title: `${cat.nameHe} — עלייה של ${pctIncrease}% לעומת חודש קודם`,
-          body: `חודש שעבר: ${formatIls(prev, { decimals: false })} ← החודש: ${formatIls(actual, { decimals: false })}`,
+          body: `חודש שעבר: ${ils(prev)} ← החודש: ${ils(actual)}`,
+          explanation:
+            `השוויתי את סך ההוצאות בקטגוריה "${cat.nameHe}" בין החודש הקודם לחודש הנוכחי.\n` +
+            `\n` +
+            `• חודש שעבר: ${ils(prev)}\n` +
+            `• החודש (${month}): ${ils(actual)}\n` +
+            `• יחס: ${ils(actual)} ÷ ${ils(prev)} = ${ratio.toFixed(2)}× (${pctIncrease}% עלייה)\n` +
+            `\n` +
+            `התראה זו נדלקת רק כאשר העלייה גדולה מ-40% וההוצאה בחודש הקודם הייתה לפחות ₪200, כדי לסנן רעש סטטיסטי בקטגוריות קטנות.`,
           href: `/transactions?month=${month}`,
         });
       }
@@ -836,7 +882,15 @@ function computeInsights(args: {
           severity: 'warning',
           icon: CreditCard,
           title: `תשלום "${name}" — לא קושרה עסקה החודש`,
-          body: `תשלום חודשי ${formatIls(Math.abs(Number(plan.paymentAmountIls)), { decimals: false })} — כדאי לקשר לעסקה`,
+          body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} — כדאי לקשר לעסקה`,
+          explanation:
+            `סרקתי את כל תוכניות התשלומים הפעילות שלך ובדקתי כמה עסקאות מקושרות אליהן בחודש הנוכחי (${month}).\n` +
+            `\n` +
+            `• תוכנית: "${name}"\n` +
+            `• תשלום חודשי קבוע: ${ils(Math.abs(Number(plan.paymentAmountIls)))}\n` +
+            `• עסקאות מקושרות החודש: 0\n` +
+            `\n` +
+            `מאחר שהיום ${day} לחודש (אחרי ה-15), אם החיוב היה אמור להגיע — הוא היה אמור להופיע כבר. ייתכן שהוא לא הוזן/יובא, או שהתשלום דולג. כדאי לבדוק.`,
           href: '/installments',
         });
       }
@@ -857,7 +911,17 @@ function computeInsights(args: {
         severity: 'info',
         icon: PartyPopper,
         title: `"${name}" ${endingThisMonth ? 'מסתיים החודש' : 'מסתיים בחודש הבא'}`,
-        body: `תשלום חודשי ${formatIls(Math.abs(Number(plan.paymentAmountIls)), { decimals: false })} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}`,
+        body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}`,
+        explanation:
+          `בדקתי תאריכי סיום צפויים של תוכניות תשלומים פעילות.\n` +
+          `\n` +
+          `• תוכנית: "${name}"\n` +
+          `• תשלום ${plan.currentPaymentNo}${plan.totalPayments ? ` מתוך ${plan.totalPayments}` : ''}\n` +
+          `• תשלום חודשי: ${ils(Math.abs(Number(plan.paymentAmountIls)))}\n` +
+          `• תאריך סיום צפוי: ${end}\n` +
+          `• חודש נוכחי: ${month}\n` +
+          `\n` +
+          `אחרי שהתוכנית תסתיים, ${ils(Math.abs(Number(plan.paymentAmountIls)))} ייפנו בכל חודש — הזדמנות מצוינת להוסיף ליעד חיסכון.`,
         href: '/installments',
       });
     }
@@ -871,6 +935,13 @@ function computeInsights(args: {
       icon: Wallet,
       title: 'לא נרשמו הכנסות החודש',
       body: `כבר יום ${day} לחודש — בדוק שהכנסות הוזנו`,
+      explanation:
+        `סכמתי את כל העסקאות החיוביות (סכום > 0, או קטגוריה שמסומנת כהכנסה) עבור חודש החיוב ${month}.\n` +
+        `\n` +
+        `• סכום ההכנסות שנמצא: 0\n` +
+        `• יום בחודש: ${day} (אחרי ה-10 — מועד שבו לרוב כבר התקבלה משכורת)\n` +
+        `\n` +
+        `אם המשכורת כבר נכנסה אבל לא רואים אותה כאן, ייתכן שהיא לא הוזנה ידנית או שהסקריפר לא רץ. בדוק בדף התנועות או הוסף עסקה חדשה.`,
       href: `/transactions?month=${month}`,
     });
   }
@@ -886,7 +957,16 @@ function computeInsights(args: {
           severity: 'positive',
           icon: Sparkles,
           title: 'תקציב בשליטה מצוינת',
-          body: `הוצאת ${Math.round(pctUsed * 100)}% מהתקציב הכולל — חסכת ${formatIls(totalTarget - spent, { decimals: false })} עד כה`,
+          body: `הוצאת ${Math.round(pctUsed * 100)}% מהתקציב הכולל — חסכת ${ils(totalTarget - spent)} עד כה`,
+          explanation:
+            `סכמתי את כל התקציבים החודשיים שהגדרת לקטגוריות שונות, ואת כל ההוצאות החודש.\n` +
+            `\n` +
+            `• סך תקציבים: ${ils(totalTarget)}\n` +
+            `• סך הוצאות עד כה: ${ils(spent)}\n` +
+            `• שיעור שימוש: ${ils(spent)} ÷ ${ils(totalTarget)} = ${Math.round(pctUsed * 100)}%\n` +
+            `• יום בחודש: ${day} מתוך ${daysInMonth} (כבר עברה אמצע החודש)\n` +
+            `\n` +
+            `מאחר שעברנו את אמצע החודש ועדיין מתחת ל-60% מהתקציב הכולל, אתה במסלול טוב. ${ils(totalTarget - spent)} עדיין זמינים עד סוף החודש.`,
         });
       }
     }
@@ -981,12 +1061,19 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
         {insights.map((insight) => {
           const cfg = SEVERITY_CFG[insight.severity];
           const Icon = insight.icon;
-          const row = (
+          const inner = (
             <div className={cn('flex items-start gap-3 px-4 py-3', cfg.rowBg, insight.href && 'hover:brightness-95 transition-all')}>
               <Icon className={cn('size-4 shrink-0 mt-0.5', cfg.iconColor)} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium leading-snug">{insight.title}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{insight.body}</p>
+                {insight.explanation && (
+                  // The toggle is a Client island — clicking it expands the
+                  // explanation block right below the body, no navigation.
+                  <div className="mt-1.5">
+                    <InsightDetailsToggle explanation={insight.explanation} />
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', cfg.badgeBg, cfg.badgeText)}>
@@ -998,7 +1085,7 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
           );
           return (
             <li key={insight.id} className={cn('border-r-4', cfg.rowBorder)}>
-              {insight.href ? <Link href={insight.href}>{row}</Link> : row}
+              {insight.href ? <Link href={insight.href}>{inner}</Link> : inner}
             </li>
           );
         })}
