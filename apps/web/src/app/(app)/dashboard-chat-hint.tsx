@@ -26,11 +26,11 @@ export function DashboardChatHint() {
       dir="rtl"
       onClick={() => window.dispatchEvent(new CustomEvent('fba:open-chat'))}
       className="mt-3 flex w-full items-center gap-2.5 rounded-md border bg-accent-soft/50 p-2.5 text-xs text-accent transition-colors hover:bg-accent-soft hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      aria-label='פתח את העוזר. דוגמה: "איפה אפשר לחסוך?". קיצור מקלדת: Cmd+K'
+      aria-label='פתח את העוזר. דוגמה: "איפה אפשר לחסוך?"'
     >
       <MessageCircle className="order-last size-3.5 shrink-0" aria-hidden="true" />
       <span className="flex-1 text-right">
-        שאל את העוזר בעברית — לדוגמה: &ldquo;איפה אפשר לחסוך?&rdquo; (⌘K)
+        שאל את העוזר בעברית — לדוגמה: &ldquo;איפה אפשר לחסוך?&rdquo;
       </span>
     </button>
   );

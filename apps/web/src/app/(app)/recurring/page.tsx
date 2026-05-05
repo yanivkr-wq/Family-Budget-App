@@ -154,7 +154,7 @@ export default async function RecurringPage() {
           <div className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/5 p-3 text-xs text-accent">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
             <span>
-              זיהוי אוטומטי של הוצאות קבועות יופעל לאחר ייבוא 3 חודשי נתונים. בינתיים, שאל את העוזר: &ldquo;אילו תשלומים חוזרים יש לי?&rdquo; (⌘K)
+              זיהוי אוטומטי של הוצאות קבועות יופעל לאחר ייבוא 3 חודשי נתונים. בינתיים, שאל את העוזר: &ldquo;אילו תשלומים חוזרים יש לי?&rdquo;
             </span>
           </div>
         </>
