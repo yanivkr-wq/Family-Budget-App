@@ -147,24 +147,23 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
       // precedence as the more specific signal (they end after N payments).
       const isRecurring = !isInstallment && !!t.recurringPatternId;
       if (isInstallment) {
+        // Compact one-line label: "תשלום N/Y · MM/YY". whitespace-nowrap keeps
+        // the pill on a single row regardless of the column width.
+        const label = t.installmentTotalPayments
+          ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
+          : `תשלום ${t.installmentCurrentPaymentNo}`;
+        const endLabel = t.installmentEndMonth
+          ? ` · ${t.installmentEndMonth.slice(5, 7)}/${t.installmentEndMonth.slice(2, 4)}`
+          : '';
         return (
           <Link
             href="/installments"
             onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
-            title="חלק מתוכנית תשלומים — פתח את הניהול"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+            title={t.installmentEndMonth ? `חלק מתוכנית תשלומים — מסתיים ${t.installmentEndMonth}` : 'חלק מתוכנית תשלומים'}
           >
             <CreditCard className="size-2.5 shrink-0" />
-            <span>
-              {t.installmentTotalPayments
-                ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
-                : `תשלום ${t.installmentCurrentPaymentNo}`}
-            </span>
-            {t.installmentEndMonth && (
-              <span className="opacity-70">
-                · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
-              </span>
-            )}
+            <span>{label}{endLabel}</span>
           </Link>
         );
       }

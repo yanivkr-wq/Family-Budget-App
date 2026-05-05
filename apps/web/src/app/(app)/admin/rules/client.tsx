@@ -24,9 +24,12 @@ import {
   ToggleLeft,
   ToggleRight,
   MessageSquare,
+  Sparkles,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NlRuleModal } from './nl-rule-modal';
+import { runAiCategorization, type AiTagResult } from './ai-actions';
 
 interface Cat {
   id: string;
@@ -70,6 +73,23 @@ export function RulesAdminClient(props: {
   const [showNlModal, setShowNlModal] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
+  const [aiResult, setAiResult] = useState<AiTagResult | null>(null);
+  const [isAiPending, setIsAiPending] = useState(false);
+
+  function handleAiCategorize() {
+    if (isAiPending) return;
+    if (!confirm('להריץ סיווג אוטומטי על כל התנועות ללא קטגוריה? פעולה זו עשויה לקחת 5-15 שניות ותיצור כללים חדשים על בסיס הזיהוי.')) return;
+    setIsAiPending(true);
+    setAiResult(null);
+    void (async () => {
+      try {
+        const r = await runAiCategorization();
+        setAiResult(r);
+      } finally {
+        setIsAiPending(false);
+      }
+    })();
+  }
   const [search, setSearch] = useState('');
 
   const filtered = useMemo(() => {
@@ -127,6 +147,17 @@ export function RulesAdminClient(props: {
         />
         <div className="ms-auto flex items-center gap-2">
           <button
+            onClick={handleAiCategorize}
+            disabled={isAiPending}
+            className="btn-secondary"
+            title="זהה אוטומטית קטגוריה עבור כל התנועות ללא קטגוריה — Claude מבצע חיפוש לפי שם בית העסק"
+          >
+            {isAiPending
+              ? <Loader2 className="size-4 animate-spin" />
+              : <Sparkles className="size-4 text-accent" />}
+            {isAiPending ? 'מסווג…' : 'תיוג AI'}
+          </button>
+          <button
             onClick={() => setShowNlModal(true)}
             className="btn-secondary"
             title="צור כלל בשפה טבעית + מיקרופון"
@@ -140,6 +171,8 @@ export function RulesAdminClient(props: {
           </button>
         </div>
       </div>
+
+      {aiResult && <AiResultModal result={aiResult} onClose={() => setAiResult(null)} />}
 
       {showNlModal && (
         <NlRuleModal
@@ -542,6 +575,82 @@ function RuleEditModal(props: {
           <button onClick={onSave} disabled={isPending || !pattern || !categoryId} className="btn-primary">
             {isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
             שמור
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function AiResultModal({ result, onClose }: { result: AiTagResult; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border bg-card shadow-xl" dir="rtl">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-2 text-base font-semibold">
+              <Sparkles className="size-4 text-accent" />
+              סיווג AI הסתיים
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {result.uniqueMerchants} בתי עסק נסקרו • {result.rulesCreated} כללים נוצרו • {result.rowsCategorized} תנועות שויכו לקטגוריה
+            </p>
+            {result.tokensIn > 0 && (
+              <p className="mt-0.5 text-[10px] text-muted-foreground/70">
+                {(result.tokensIn / 1000).toFixed(1)}K tokens-in • {result.tokensOut} tokens-out • {(result.durationMs / 1000).toFixed(1)}s
+              </p>
+            )}
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-accent/40">
+            <X className="size-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5 text-sm">
+          {!result.ok && result.message && (
+            <div className="mb-3 rounded-md border border-destructive/40 bg-destructive-soft p-3 text-destructive">
+              {result.message}
+            </div>
+          )}
+
+          {result.results.length === 0 ? (
+            <p className="text-muted-foreground">אין תוצאות להציג.</p>
+          ) : (
+            <ul className="divide-y">
+              {result.results.map((r) => (
+                <li key={r.merchantNormalized} className="flex items-start gap-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">{r.merchantNormalized}</span>
+                      <span className="text-[10px] text-muted-foreground">{r.txnCount} תנועות</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{r.reasoning}</p>
+                  </div>
+                  <div className="shrink-0 text-end">
+                    {r.applied ? (
+                      <>
+                        <p className="text-xs font-medium text-success">{r.categoryNameHe ?? "—"}</p>
+                        <p className="text-[10px] text-muted-foreground tabular-nums">{Math.round(r.confidence * 100)}% ביטחון</p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-warning">לא הוחל • {Math.round(r.confidence * 100)}%</p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="border-t bg-muted/30 px-5 py-3 text-end">
+          <button onClick={onClose} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+            סיום
           </button>
         </div>
       </div>
