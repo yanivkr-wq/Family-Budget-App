@@ -44,6 +44,30 @@ export interface InstitutionTemplate {
   dateFormat: DateFormat;
   /** Default sign: if amount in source is unsigned, treat as expense (true) or income (false). */
   defaultIsExpense: boolean;
+  /** Per-template behaviour flags for handling format quirks that don't fit the
+   *  generic column-mapping model. The smart-importer checks each flag and
+   *  applies the corresponding logic. */
+  formatHandling?: {
+    /** Scan rows BEFORE the header for "לחיוב ב-DD/MM/YYYY" — use as
+     *  chargeDate for every row in the file. Used when the file applies a
+     *  single charge date globally and only writes it once at the top. */
+    chargeDateFromHeaderRow?: boolean;
+    /** col 2's raw cell value carries the original amount with a currency
+     *  prefix ("$ 20.00", "€ 14,90"). Extract original amount + currency from
+     *  the prefix when it's not ₪. */
+    forexFromAmountPrefix?: boolean;
+    /** Which column carries the prefixed original amount (default: 2). */
+    forexPrefixColumn?: number;
+    /** Read ALL sheets, not just the first. Used by multi-sheet exports
+     *  (e.g. Discount Key keeps forex on its own sheet). */
+    multiSheet?: boolean;
+    /** When set, rows from a sheet whose name matches this pattern are
+     *  flagged as forex and get chargeDate = transactionDate (immediate). */
+    forexSheetPattern?: RegExp;
+    /** Substring in the notes column that marks a row as pending — skip
+     *  silently (no error reported). */
+    pendingNotesMarker?: string;
+  };
 }
 
 export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
@@ -207,13 +231,12 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
   },
 
   // -------- Israeli "bank-portal" CC export (Diners via Leumi, Visa via Discount, etc.) --------
-  // The bank's online portal exports your CC charges. Same structure regardless
-  // of which bank/CC. Single sheet, 7 columns. The charge date is in a header
-  // row above the data ("עסקאות לחיוב ב-DD/MM/YYYY") — currently we lose it,
-  // but we can derive billing_month later from the row dates + cutoff_day.
-  // Forex: col 2 (סכום עסקה) carries the original amount with a non-₪ prefix
-  // ("$ 20.00"). We don't extract the original currency in v1; col 3 always
-  // gives the ILS-converted charge which is what the user actually pays.
+  // The bank's online portal exports your CC charges. Same structure
+  // regardless of which bank/CC. Single sheet, 7 columns. Charge date is in
+  // a header row above the data ("עסקאות לחיוב ב-DD/MM/YYYY") and is the
+  // SAME for every row in the file. Forex rows have a non-₪ prefix in col 2
+  // ("$ 20.00", "€ 14,90") — we extract the original currency from there
+  // while col 3 always gives the ILS-converted charge.
   {
     id: 'il-cc-bank-export',
     name: 'CC export מבנק (לאומי / דיסקונט / וכד׳)',
@@ -235,6 +258,12 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     amountConvention: 'signed',
     dateFormat: 'dd/mm/yyyy',
     defaultIsExpense: true,
+    formatHandling: {
+      chargeDateFromHeaderRow: true,
+      forexFromAmountPrefix:   true,
+      forexPrefixColumn:       2,
+      pendingNotesMarker:      'עסקה בקליטה',
+    },
   },
 
   // -------- Discount Key (מפתח דיסקונט) — multi-card aggregator export --------
@@ -270,6 +299,12 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     amountConvention: 'signed',
     dateFormat: 'dd-mm-yyyy',
     defaultIsExpense: true,
+    formatHandling: {
+      multiSheet:        true,
+      // Sheet name "עסקאות חו"ל ומט"ח" — match on "חו"ל" or "ומט"ח" since
+      // the smart quote may vary between exports.
+      forexSheetPattern: /חו["'״]ל|ומט["'״]ח/,
+    },
   },
 ];
 

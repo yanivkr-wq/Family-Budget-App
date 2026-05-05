@@ -28,6 +28,11 @@ export interface SmartTransaction {
   originalCurrency: string | null;
   notes: string | null;
   installmentInfo: string | null;
+  /** True when the row was a foreign-currency purchase. Set by per-template
+   *  formatHandling rules (forexFromAmountPrefix, forexSheetPattern). */
+  isForex: boolean;
+  /** Sheet of origin (for multi-sheet exports like Discount Key). */
+  sheetName?: string;
   /** Source row index for diagnostics */
   sourceRow: number;
 }
@@ -121,31 +126,80 @@ function applyAmountConvention(
   }
 }
 
-async function readToRows(buffer: ArrayBuffer | Buffer, isExcel: boolean): Promise<unknown[][]> {
+interface ParsedSheet {
+  sheetName: string;
+  rows: unknown[][];
+}
+
+async function readSheets(buffer: ArrayBuffer | Buffer, isExcel: boolean): Promise<ParsedSheet[]> {
   if (isExcel) {
     const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-    // Use the first sheet — banks usually export to a single sheet
-    const ws = wb.Sheets[wb.SheetNames[0]!];
-    if (!ws) return [];
-    return XLSX.utils.sheet_to_json<unknown[]>(ws, {
-      header: 1,
-      raw: false,
-      defval: '',
-      blankrows: false,
+    return wb.SheetNames.map((name) => {
+      const ws = wb.Sheets[name];
+      const rows = ws
+        ? XLSX.utils.sheet_to_json<unknown[]>(ws, {
+            header: 1, raw: false, defval: '', blankrows: false,
+          })
+        : [];
+      return { sheetName: name, rows };
     });
   }
-  // CSV path
+  // CSV path — single "sheet"
   const text = typeof buffer === 'string' ? buffer : new TextDecoder('utf-8').decode(buffer as ArrayBuffer);
   const parsed = parseCsv(text);
-  return [parsed.headers, ...parsed.rows];
+  return [{ sheetName: '__csv__', rows: [parsed.headers, ...parsed.rows] }];
+}
+
+// ─── Helpers for the format-quirk handling ───────────────────────────────────
+
+const CURRENCY_PREFIX_MAP: Record<string, string> = {
+  '$': 'USD',
+  '€': 'EUR',
+  '£': 'GBP',
+  '₪': 'ILS',
+};
+
+/** Parse a cell that mixes currency + amount as a single string ("$ 20.00",
+ *  "€ 14,90", "₪ 6,327.00"). Used by Format A's col 2 (סכום עסקה) which
+ *  carries the original-currency amount with the symbol baked in. */
+function extractCurrencyAndAmount(raw: unknown): { currency: string | null; amount: number | null } {
+  const s = String(raw ?? '').trim();
+  if (!s) return { currency: null, amount: null };
+  const m = /^([₪$€£])\s*([\d,]+(?:\.\d+)?)$/.exec(s);
+  if (!m) return { currency: null, amount: null };
+  const symbol = m[1]!;
+  const num = Number(m[2]!.replace(/,/g, ''));
+  return {
+    currency: CURRENCY_PREFIX_MAP[symbol] ?? symbol,
+    amount: Number.isFinite(num) ? num : null,
+  };
+}
+
+/** Scan rows above the header for "לחיוב ב-DD/MM/YYYY" (or DD.MM.YYYY etc.)
+ *  and return the parsed ISO date. Used by Format A files where the charge
+ *  date applies globally to every row but only appears once at the top. */
+function extractGlobalChargeDate(rowsBeforeHeader: unknown[][]): string | null {
+  for (const row of rowsBeforeHeader) {
+    if (!Array.isArray(row)) continue;
+    for (const cell of row) {
+      const s = String(cell ?? '');
+      const m = /לחיוב\s*ב[-]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})/.exec(s);
+      if (m) {
+        let [, d, mo, y] = m;
+        if (y!.length === 2) y = '20' + y;
+        return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+    }
+  }
+  return null;
 }
 
 export async function smartImport(
   buffer: ArrayBuffer | Buffer,
   isExcel: boolean,
 ): Promise<SmartImportResult> {
-  const allRows = await readToRows(buffer, isExcel);
-  if (allRows.length === 0) {
+  const sheets = await readSheets(buffer, isExcel);
+  if (sheets.length === 0 || sheets[0]!.rows.length === 0) {
     return {
       success: false,
       templateUsed: null,
@@ -158,8 +212,11 @@ export async function smartImport(
     };
   }
 
-  // Sample for institution detection — top 30 rows
-  const sampleText = allRows
+  // Detect institution from the FIRST sheet only — that's where bank-name
+  // header rows live. Multi-sheet templates apply the same mapping to all
+  // sheets.
+  const firstRows = sheets[0]!.rows;
+  const sampleText = firstRows
     .slice(0, 30)
     .map((row) => (Array.isArray(row) ? row.map((c) => String(c ?? '')).join(' ') : ''))
     .join('\n');
@@ -170,95 +227,154 @@ export async function smartImport(
       success: false,
       templateUsed: null,
       transactions: [],
-      headers: Array.isArray(allRows[0]) ? (allRows[0] as unknown[]).map((c) => String(c ?? '')) : [],
+      headers: Array.isArray(firstRows[0]) ? (firstRows[0] as unknown[]).map((c) => String(c ?? '')) : [],
       errors: [],
       needsManualMapping: true,
-      sampleRows: allRows.slice(0, 6),
-      detectedHeaderRowIndex: findHeaderRow(allRows),
+      sampleRows: firstRows.slice(0, 6),
+      detectedHeaderRowIndex: findHeaderRow(firstRows),
     };
   }
 
-  // Find the header row
-  const headerRowIdx =
-    template.headerRowIndex === 'auto' ? findHeaderRow(allRows) : (template.headerRowIndex as number);
-  const headers = Array.isArray(allRows[headerRowIdx])
-    ? (allRows[headerRowIdx] as unknown[]).map((c) => String(c ?? ''))
-    : [];
+  // Decide which sheets to process. multiSheet templates (Discount Key) read
+  // all of them so the secondary forex sheet isn't dropped silently.
+  const handling = template.formatHandling ?? {};
+  const sheetsToProcess = handling.multiSheet ? sheets : [sheets[0]!];
 
   const transactions: SmartTransaction[] = [];
   const errors: Array<{ row: number; reason: string }> = [];
+  let firstHeaderRowIdx = 0; // for the result preview
+  let firstHeaders: string[] = [];
 
-  for (let i = headerRowIdx + 1; i < allRows.length; i++) {
-    const row = allRows[i];
-    if (!Array.isArray(row)) continue;
+  for (let sheetIdx = 0; sheetIdx < sheetsToProcess.length; sheetIdx++) {
+    const sheet = sheetsToProcess[sheetIdx]!;
+    const rows = sheet.rows;
+    if (rows.length === 0) continue;
 
-    // Skip rows that look entirely blank
-    const hasContent = row.some((c) => String(c ?? '').trim() !== '');
-    if (!hasContent) continue;
+    const headerRowIdx =
+      template.headerRowIndex === 'auto' ? findHeaderRow(rows) : (template.headerRowIndex as number);
 
-    const txnDate = parseDateForTemplate(row[template.columns.transactionDate], template.dateFormat);
-    if (!txnDate) {
-      // Could be a footer/totals row — skip silently if early rows are valid
-      if (i - headerRowIdx > 3 && transactions.length > 0) continue;
-      errors.push({ row: i + 1, reason: `תאריך לא תקין: "${row[template.columns.transactionDate]}"` });
-      continue;
+    if (sheetIdx === 0) {
+      firstHeaderRowIdx = headerRowIdx;
+      firstHeaders = Array.isArray(rows[headerRowIdx])
+        ? (rows[headerRowIdx] as unknown[]).map((c) => String(c ?? ''))
+        : [];
     }
 
-    const chargeDate =
-      template.columns.chargeDate !== undefined
-        ? parseDateForTemplate(row[template.columns.chargeDate], template.dateFormat)
+    // Per-sheet "global charge date" (Format A: same date applies to every row
+    // in the file, lifted from a "לחיוב ב-DD/MM/YYYY" row above the header).
+    const globalChargeDate = handling.chargeDateFromHeaderRow
+      ? extractGlobalChargeDate(rows.slice(0, headerRowIdx))
+      : null;
+
+    // Sheet-level forex flag: the whole sheet is forex transactions.
+    const sheetIsForex = handling.forexSheetPattern
+      ? handling.forexSheetPattern.test(sheet.sheetName)
+      : false;
+
+    const cols = template.columns;
+    for (let i = headerRowIdx + 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!Array.isArray(row)) continue;
+
+      const hasContent = row.some((c) => String(c ?? '').trim() !== '');
+      if (!hasContent) continue;
+
+      // Pull notes early so we can short-circuit on pending markers.
+      const notes = cols.notes !== undefined
+        ? String(row[cols.notes] ?? '').trim() || null
         : null;
 
-    const merchantRaw = String(row[template.columns.merchant] ?? '').trim();
-    if (!merchantRaw) {
-      errors.push({ row: i + 1, reason: 'שם בית עסק ריק' });
-      continue;
-    }
+      // Silent skip for pending rows ("עסקה בקליטה" in Format A files).
+      if (handling.pendingNotesMarker && notes && notes.includes(handling.pendingNotesMarker)) {
+        continue;
+      }
 
-    const amtResult = applyAmountConvention(row, template);
-    if (!amtResult) {
-      errors.push({ row: i + 1, reason: 'סכום לא תקין' });
-      continue;
-    }
-    const signedAmount = amtResult.isExpense ? -amtResult.amount : amtResult.amount;
+      const txnDate = parseDateForTemplate(row[cols.transactionDate], template.dateFormat);
+      if (!txnDate) {
+        // Could be a footer/totals row — skip silently if we already have data.
+        if (i - headerRowIdx > 3 && transactions.length > 0) continue;
+        errors.push({ row: i + 1, reason: `תאריך לא תקין: "${row[cols.transactionDate]}"` });
+        continue;
+      }
 
-    transactions.push({
-      transactionDate: txnDate,
-      chargeDate,
-      merchantRaw,
-      amountIls: signedAmount,
-      originalAmount:
-        template.columns.originalAmount !== undefined
-          ? (() => {
-              const v = parseAmount(row[template.columns.originalAmount]);
-              return Number.isFinite(v) && v !== 0 ? Math.abs(v) : null;
-            })()
-          : null,
-      originalCurrency:
-        template.columns.originalCurrency !== undefined
-          ? String(row[template.columns.originalCurrency] ?? '').trim() || null
-          : null,
-      notes:
-        template.columns.notes !== undefined
-          ? String(row[template.columns.notes] ?? '').trim() || null
-          : null,
-      installmentInfo:
-        template.columns.installmentInfo !== undefined
-          ? String(row[template.columns.installmentInfo] ?? '').trim() || null
-          : null,
-      sourceRow: i + 1,
-    });
+      const merchantRaw = String(row[cols.merchant] ?? '').trim();
+      if (!merchantRaw) {
+        errors.push({ row: i + 1, reason: 'שם בית עסק ריק' });
+        continue;
+      }
+
+      const amtResult = applyAmountConvention(row, template);
+      if (!amtResult) {
+        errors.push({ row: i + 1, reason: 'סכום לא תקין' });
+        continue;
+      }
+      const signedAmount = amtResult.isExpense ? -amtResult.amount : amtResult.amount;
+
+      // Original currency / amount — multiple possible sources:
+      //   1. Format B style: explicit columns (originalAmount + originalCurrency)
+      //   2. Format A style: extracted from a single "$ 20.00" cell prefix
+      let originalAmount: number | null = null;
+      let originalCurrency: string | null = null;
+      if (cols.originalAmount !== undefined) {
+        const v = parseAmount(row[cols.originalAmount]);
+        if (Number.isFinite(v) && v !== 0) originalAmount = Math.abs(v);
+      }
+      if (cols.originalCurrency !== undefined) {
+        const v = String(row[cols.originalCurrency] ?? '').trim();
+        if (v) originalCurrency = CURRENCY_PREFIX_MAP[v] ?? v;
+      }
+      if (handling.forexFromAmountPrefix) {
+        const colIdx = handling.forexPrefixColumn ?? 2;
+        const ext = extractCurrencyAndAmount(row[colIdx]);
+        if (ext.currency && ext.currency !== 'ILS') {
+          originalCurrency = ext.currency;
+          if (ext.amount !== null) originalAmount = ext.amount;
+        }
+      }
+
+      // isForex: anything non-ILS, OR the whole sheet is the forex sheet.
+      const isForex = sheetIsForex || (originalCurrency !== null && originalCurrency !== 'ILS');
+
+      // chargeDate resolution priority:
+      //   1. Per-row column (Format B)
+      //   2. Forex → equals transactionDate (immediate charge — user requested)
+      //   3. Global header date (Format A)
+      //   4. null (calculated later from billing-cycle logic)
+      let chargeDate: string | null = null;
+      if (cols.chargeDate !== undefined) {
+        chargeDate = parseDateForTemplate(row[cols.chargeDate], template.dateFormat);
+      }
+      if (!chargeDate && isForex) chargeDate = txnDate;
+      if (!chargeDate && globalChargeDate) chargeDate = globalChargeDate;
+
+      transactions.push({
+        transactionDate: txnDate,
+        chargeDate,
+        merchantRaw,
+        amountIls: signedAmount,
+        originalAmount,
+        originalCurrency,
+        notes,
+        installmentInfo:
+          cols.installmentInfo !== undefined
+            ? String(row[cols.installmentInfo] ?? '').trim() || null
+            : null,
+        isForex,
+        sheetName: sheet.sheetName,
+        sourceRow: i + 1,
+      });
+    }
   }
 
   return {
     success: transactions.length > 0,
     templateUsed: template,
     transactions,
-    headers,
+    headers: firstHeaders,
     errors,
     needsManualMapping: false,
-    sampleRows: allRows.slice(headerRowIdx, headerRowIdx + 6),
-    detectedHeaderRowIndex: headerRowIdx,
+    sampleRows: sheets[0]!.rows.slice(firstHeaderRowIdx, firstHeaderRowIdx + 6),
+    detectedHeaderRowIndex: firstHeaderRowIdx,
   };
 }
 
