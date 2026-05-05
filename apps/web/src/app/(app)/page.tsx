@@ -449,7 +449,14 @@ export default async function DashboardPage(props: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ViewTabs current={view} hrefBuilder={(v) => `/?view=${v}&month=${month}`} />
+          <ViewTabs
+            current={view}
+            hrefs={{
+              combined: `/?view=combined&month=${month}`,
+              personal: `/?view=personal&month=${month}`,
+              business: `/?view=business&month=${month}`,
+            }}
+          />
           <form action="/" method="get">
             <input type="hidden" name="view" value={view} />
             <select

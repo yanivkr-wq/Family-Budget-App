@@ -80,10 +80,14 @@ export function getViewOption(view: View): ViewOption {
 
 export function ViewTabs({
   current,
-  hrefBuilder,
+  hrefs,
 }: {
   current: View;
-  hrefBuilder: (v: View) => string;
+  /** Pre-computed URL for each tab — passed as plain data (not a builder
+   *  function) because functions can't cross the Server → Client boundary.
+   *  The hosting page knows its own URL pattern; it builds all three hrefs
+   *  upfront and we just look them up here. */
+  hrefs: Record<View, string>;
 }) {
   // On click, write the chosen view to a cookie so subsequent server-rendered
   // pages can read it as the default. We do this BEFORE the navigation so the
@@ -105,7 +109,7 @@ export function ViewTabs({
         return (
           <Link
             key={opt.value}
-            href={hrefBuilder(opt.value)}
+            href={hrefs[opt.value]}
             onClick={() => rememberView(opt.value)}
             role="tab"
             aria-selected={isActive}

@@ -239,7 +239,14 @@ export default async function TransactionsPage(props: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <ViewTabs current={view} hrefBuilder={(v) => `/transactions?view=${v}&month=${month}`} />
+          <ViewTabs
+            current={view}
+            hrefs={{
+              combined: `/transactions?view=combined&month=${month}`,
+              personal: `/transactions?view=personal&month=${month}`,
+              business: `/transactions?view=business&month=${month}`,
+            }}
+          />
           <MonthSwitcher
             month={month}
             view={view}
