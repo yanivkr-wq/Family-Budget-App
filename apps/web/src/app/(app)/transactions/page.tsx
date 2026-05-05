@@ -8,18 +8,8 @@ import { redirect } from 'next/navigation';
 import { TransactionsList } from './transactions-list';
 import { MonthSwitcher } from './month-switcher';
 import { autoComputeChargeDate } from '@/lib/charge-date';
-import { Clock, CheckCircle2, CalendarClock, User as UserIcon, Briefcase, Users } from 'lucide-react';
-import { cn } from '@/lib/utils';
-
-type View = 'personal' | 'business' | 'combined';
-
-// Same shape as the dashboard's view tabs — see /apps/web/src/app/(app)/page.tsx.
-// Future improvement: extract to a shared component once a third page needs it.
-const VIEW_OPTIONS: Array<{ value: View; label: string; icon: typeof UserIcon; helpText: string }> = [
-  { value: 'personal', label: 'אישי',   icon: UserIcon,  helpText: 'חשבונות פרטיים בלבד' },
-  { value: 'business', label: 'עסקי',   icon: Briefcase, helpText: 'חשבונות עסקיים בלבד' },
-  { value: 'combined', label: 'משולב',  icon: Users,     helpText: 'הכל ביחד' },
-];
+import { Clock, CheckCircle2, CalendarClock } from 'lucide-react';
+import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
 
 export const dynamic = 'force-dynamic';
 
@@ -216,6 +206,9 @@ export default async function TransactionsPage(props: {
 
   return (
     <div className="space-y-6">
+      {/* 2px colored stripe — anchors which view (אישי/עסקי/משולב) is active. */}
+      <ViewStripe view={view} />
+
       {/* ── Page header ── */}
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -230,7 +223,7 @@ export default async function TransactionsPage(props: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <ViewTabs current={view} month={month} />
+          <ViewTabs current={view} hrefBuilder={(v) => `/transactions?view=${v}&month=${month}`} />
           <MonthSwitcher
             month={month}
             view={view}
@@ -373,38 +366,7 @@ export default async function TransactionsPage(props: {
   );
 }
 
-function ViewTabs({ current, month }: { current: View; month: string }) {
-  return (
-    <div
-      role="tablist"
-      aria-label="תצוגת חשבונות"
-      className="inline-flex items-center rounded-md border bg-card p-0.5 shadow-sm"
-    >
-      {VIEW_OPTIONS.map((opt) => {
-        const isActive = current === opt.value;
-        const Icon = opt.icon;
-        return (
-          <Link
-            key={opt.value}
-            href={`/transactions?view=${opt.value}&month=${month}`}
-            role="tab"
-            aria-selected={isActive}
-            title={opt.helpText}
-            className={cn(
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-              isActive
-                ? 'bg-primary-soft text-primary'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Icon className="size-3.5" />
-            {opt.label}
-          </Link>
-        );
-      })}
-    </div>
-  );
-}
+// ViewTabs is now imported from @/components/view-tabs (shared with dashboard).
 
 // ── DualCycleBanner ───────────────────────────────────────────────────────────
 

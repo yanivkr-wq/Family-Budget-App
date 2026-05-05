@@ -15,15 +15,13 @@ import { InsightDetailsToggle } from './dashboard-insight-details';
 import { InsightsCatalogToggle } from './dashboard-insights-catalog';
 import { DashboardChatHint } from './dashboard-chat-hint';
 import { GoalIcon } from '@/components/ui/goal-icon';
+import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
 import {
   Wallet,
   TrendingDown,
   TrendingUp,
   Plus,
   BadgeAlert,
-  User as UserIcon,
-  Briefcase,
-  Users,
   CreditCard,
   Banknote,
   PiggyBank,
@@ -39,7 +37,7 @@ import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-type View = 'personal' | 'business' | 'combined';
+// View type now lives in @/components/view-tabs (shared with /transactions).
 
 export default async function DashboardPage(props: {
   searchParams: Promise<{ month?: string; view?: string }>;
@@ -406,6 +404,9 @@ export default async function DashboardPage(props: {
 
   return (
     <div className="space-y-6">
+      {/* 2px colored stripe — anchors which view (אישי/עסקי/משולב) is active. */}
+      <ViewStripe view={view} />
+
       <header className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{he.nav.dashboard}</h1>
@@ -419,7 +420,7 @@ export default async function DashboardPage(props: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ViewTabs current={view} month={month} />
+          <ViewTabs current={view} hrefBuilder={(v) => `/?view=${v}&month=${month}`} />
           <form action="/" method="get">
             <input type="hidden" name="view" value={view} />
             <select
@@ -722,12 +723,6 @@ export default async function DashboardPage(props: {
   );
 }
 
-const VIEW_OPTIONS: Array<{ value: View; label: string; icon: typeof UserIcon; helpText: string }> =
-  [
-    { value: 'personal', label: 'אישי', icon: UserIcon, helpText: 'חשבונות פרטיים בלבד' },
-    { value: 'business', label: 'עסקי', icon: Briefcase, helpText: 'חשבונות עסקיים בלבד' },
-    { value: 'combined', label: 'משולב', icon: Users, helpText: 'הכל, ללא ספירה כפולה של העברות' },
-  ];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Insights
@@ -1101,37 +1096,3 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ViewTabs({ current, month }: { current: View; month: string }) {
-  return (
-    <div
-      role="tablist"
-      aria-label="View"
-      className="inline-flex items-center rounded-md border bg-card p-0.5 shadow-sm"
-    >
-      {VIEW_OPTIONS.map((opt) => {
-        const isActive = current === opt.value;
-        const Icon = opt.icon;
-        return (
-          <Link
-            key={opt.value}
-            href={`/?view=${opt.value}&month=${month}`}
-            role="tab"
-            aria-selected={isActive}
-            title={opt.helpText}
-            className={cn(
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-              isActive
-                ? 'bg-primary-soft text-primary'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Icon className="size-3.5" />
-            {opt.label}
-          </Link>
-        );
-      })}
-    </div>
-  );
-}
