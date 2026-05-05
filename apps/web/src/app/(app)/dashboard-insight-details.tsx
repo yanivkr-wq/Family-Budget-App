@@ -16,25 +16,27 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Info, X, type LucideIcon } from 'lucide-react';
+import { Info, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { INSIGHT_ICONS, type InsightIconName } from './dashboard-insight-icons';
 
 export function InsightDetailsToggle({
   title,
   explanation,
-  icon: Icon,
+  iconName,
   iconColorClass,
 }: {
   title:           string;
   explanation:     string;
-  /** Lucide icon component for the originating insight — rendered next to
-   *  the title in the popup header so the popup keeps the visual identity
-   *  of the row it came from. */
-  icon?:           LucideIcon;
+  /** NAME of the Lucide icon to render next to the title — passed as a
+   *  string instead of the component so the prop can cross the
+   *  Server → Client boundary. Resolved via INSIGHT_ICONS. */
+  iconName?:       InsightIconName;
   /** Tailwind text-color class for the icon (matches the row's severity
    *  color). E.g. 'text-destructive' / 'text-warning' / 'text-primary'. */
   iconColorClass?: string;
 }) {
+  const Icon = iconName ? INSIGHT_ICONS[iconName] : undefined;
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const backdropRef = useRef<HTMLDivElement>(null);

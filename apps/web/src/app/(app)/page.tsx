@@ -17,6 +17,7 @@ import { DashboardChatHint } from './dashboard-chat-hint';
 import { GoalIcon } from '@/components/ui/goal-icon';
 import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
 import { readActiveView } from '@/components/view-tabs-server';
+import { INSIGHT_ICONS, type InsightIconName } from './dashboard-insight-icons';
 import {
   Wallet,
   TrendingDown,
@@ -29,11 +30,7 @@ import {
   PiggyBank,
   Sparkles,
   ChevronLeft,
-  AlertOctagon,
-  AlertTriangle,
-  PartyPopper,
   Info,
-  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -779,7 +776,10 @@ type InsightSeverity = 'critical' | 'warning' | 'info' | 'positive';
 interface Insight {
   id: string;
   severity: InsightSeverity;
-  icon: LucideIcon;
+  /** Icon NAME (string), not the Lucide component itself, so the Insight
+   *  payload can cross the Server → Client boundary (props to
+   *  InsightDetailsToggle). Resolved to a component via INSIGHT_ICONS. */
+  icon: InsightIconName;
   title: string;
   body: string;
   /** Plain-language calculation/reasoning shown when the user clicks the
@@ -827,7 +827,7 @@ function computeInsights(args: {
       insights.push({
         id: `over-budget-${cat.id}`,
         severity: 'critical',
-        icon: AlertOctagon,
+        icon: 'AlertOctagon',
         title: `${cat.nameHe} — חרגת מהתקציב`,
         body: `הוצאת ${ils(actual)} מתוך ${ils(target)} (${ils(over)} מעל)`,
         explanation:
@@ -847,7 +847,7 @@ function computeInsights(args: {
     insights.push({
       id: 'projected-negative',
       severity: 'critical',
-      icon: TrendingDown,
+      icon: 'TrendingDown',
       title: 'תחזית סוף חודש שלילית',
       body: `לפי קצב ההוצאות הנוכחי, הסוף חודש צפוי להיות ${ils(projectedEom)}`,
       explanation:
@@ -873,7 +873,7 @@ function computeInsights(args: {
         insights.push({
           id: `near-budget-${cat.id}`,
           severity: 'warning',
-          icon: AlertTriangle,
+          icon: 'AlertTriangle',
           title: `${cat.nameHe} — ${Math.round(pct)}% מהתקציב`,
           body: `נותר ${ils(target - actual)} מתקציב ${ils(target)}`,
           explanation:
@@ -904,7 +904,7 @@ function computeInsights(args: {
         insights.push({
           id: `mom-spike-${cat.id}`,
           severity: 'warning',
-          icon: TrendingUp,
+          icon: 'TrendingUp',
           title: `${cat.nameHe} — עלייה של ${pctIncrease}% לעומת חודש קודם`,
           body: `חודש שעבר: ${ils(prev)} ← החודש: ${ils(actual)}`,
           explanation:
@@ -929,7 +929,7 @@ function computeInsights(args: {
         insights.push({
           id: `installment-missing-${plan.id}`,
           severity: 'warning',
-          icon: CreditCard,
+          icon: 'CreditCard',
           title: `תשלום "${name}" — לא קושרה עסקה החודש`,
           body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} — כדאי לקשר לעסקה`,
           explanation:
@@ -958,7 +958,7 @@ function computeInsights(args: {
       insights.push({
         id: `ending-soon-${plan.id}`,
         severity: 'info',
-        icon: PartyPopper,
+        icon: 'PartyPopper',
         title: `"${name}" ${endingThisMonth ? 'מסתיים החודש' : 'מסתיים בחודש הבא'}`,
         body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}`,
         explanation:
@@ -981,7 +981,7 @@ function computeInsights(args: {
     insights.push({
       id: 'no-income',
       severity: 'warning',
-      icon: Wallet,
+      icon: 'Wallet',
       title: 'לא נרשמו הכנסות החודש',
       body: `כבר יום ${day} לחודש — בדוק שהכנסות הוזנו`,
       explanation:
@@ -1004,7 +1004,7 @@ function computeInsights(args: {
         insights.push({
           id: 'under-budget',
           severity: 'positive',
-          icon: Sparkles,
+          icon: 'Sparkles',
           title: 'תקציב בשליטה מצוינת',
           body: `הוצאת ${Math.round(pctUsed * 100)}% מהתקציב הכולל — חסכת ${ils(totalTarget - spent)} עד כה`,
           explanation:
@@ -1031,7 +1031,7 @@ function computeInsights(args: {
       insights.push({
         id: 'recurring-share',
         severity,
-        icon: Repeat,
+        icon: 'Repeat',
         title: `הוצאות קבועות = ${pctRound}% מההכנסות`,
         body: `${ils(recurringMonthlyExpense)} מתוך ${ils(totalIncome)} כבר מחויבים בכל חודש`,
         explanation:
@@ -1138,7 +1138,7 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
       <ul className="divide-y">
         {insights.map((insight) => {
           const cfg = SEVERITY_CFG[insight.severity];
-          const Icon = insight.icon;
+          const Icon = INSIGHT_ICONS[insight.icon];
           const inner = (
             <div className={cn('flex items-start gap-3 px-4 py-3', cfg.rowBg, insight.href && 'hover:brightness-95 transition-all')}>
               <Icon className={cn('size-4 shrink-0 mt-0.5', cfg.iconColor)} />
@@ -1153,7 +1153,7 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
                     <InsightDetailsToggle
                       title={insight.title}
                       explanation={insight.explanation}
-                      icon={insight.icon}
+                      iconName={insight.icon}
                       iconColorClass={cfg.iconColor}
                     />
                   )}
