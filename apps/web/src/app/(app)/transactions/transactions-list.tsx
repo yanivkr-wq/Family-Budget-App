@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useTransition, useMemo } from 'react';
+import Link from 'next/link';
 import { formatIls, formatDateHe } from '@fba/shared';
-import { Sparkles, Trash2, Pencil, Zap, User, Clock, Upload, CalendarClock } from 'lucide-react';
+import { Sparkles, Trash2, Pencil, Zap, User, Clock, Upload, CalendarClock, CreditCard } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { RuleModal } from './rule-modal';
 import { EditTransactionModal } from './edit-modal';
@@ -28,6 +29,13 @@ interface Transaction {
   categorySource?: string | null;
   ruleName?: string | null;
   isManual?: boolean;
+  // Installment-plan link. When installmentPlanId is non-null, this row is
+  // one monthly payment of a multi-payment plan — render with a primary
+  // accent + a "תשלום N/Y · עד MM/YY" pill.
+  installmentPlanId?: string | null;
+  installmentCurrentPaymentNo?: number | null;
+  installmentTotalPayments?: number | null;
+  installmentEndMonth?: string | null;  // 'YYYY-MM'
 }
 
 function sumExpenses(txns: Transaction[]) {
@@ -35,6 +43,14 @@ function sumExpenses(txns: Transaction[]) {
 }
 function sumIncome(txns: Transaction[]) {
   return txns.filter((t) => t.amount >= 0).reduce((s, t) => s + t.amount, 0);
+}
+/** Sum of installment-linked expenses in a slice. Used in section headers
+ *  ("מהן ₪750 בתשלומים") so the user knows how much of the cycle is locked
+ *  into existing payment plans. */
+function sumInstallments(txns: Transaction[]) {
+  return txns
+    .filter((t) => t.installmentPlanId && t.amount < 0)
+    .reduce((s, t) => s + Math.abs(t.amount), 0);
 }
 
 const COL_COUNT = 10;
@@ -238,6 +254,7 @@ export function TransactionsList(props: {
                   const isAutoRule   = t.categorySource === 'rule';
                   const isLlm        = t.categorySource === 'llm';
                   const txIsManual   = t.isManual !== false;
+                  const isInstallment = !!t.installmentPlanId;
 
                   return (
                     <tr
@@ -245,6 +262,10 @@ export function TransactionsList(props: {
                       className={cn(
                         'border-b last:border-0 transition-colors hover:bg-accent/30',
                         isSelected && 'bg-primary-soft/40',
+                        // Right-border accent (= visual start in RTL) marks
+                        // installment-linked rows so they stand out at a glance
+                        // without changing the row layout.
+                        isInstallment && 'border-r-2 border-r-primary/60',
                       )}
                     >
                       <td className="px-2 py-2 align-top">
@@ -275,7 +296,33 @@ export function TransactionsList(props: {
                         ) : null}
                       </td>
 
-                      <td className="px-3 py-2 align-top">{t.merchant}</td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span>{t.merchant}</span>
+                          {isInstallment && (
+                            // Plan-payment pill — clickable, takes the user to
+                            // the installments admin to manage the plan.
+                            <Link
+                              href="/installments"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+                              title="חלק מתוכנית תשלומים — פתח את הניהול"
+                            >
+                              <CreditCard className="size-2.5 shrink-0" />
+                              <span>
+                                {t.installmentTotalPayments
+                                  ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
+                                  : `תשלום ${t.installmentCurrentPaymentNo}`}
+                              </span>
+                              {t.installmentEndMonth && (
+                                <span className="opacity-70">
+                                  · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
+                                </span>
+                              )}
+                            </Link>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-3 py-2 align-top text-muted-foreground">{acc?.name ?? '—'}</td>
 
                       {/* Source badge */}
@@ -346,7 +393,7 @@ export function TransactionsList(props: {
 
                 // ── Section header helper ─────────────────────────────────
                 const SectionHeader = ({
-                  icon, label, count, expenses, income,
+                  icon, label, count, expenses, income, installments,
                   colorClass, bgClass,
                 }: {
                   icon: React.ReactNode;
@@ -354,6 +401,11 @@ export function TransactionsList(props: {
                   count: number;
                   expenses: number;
                   income: number;
+                  /** Subtotal of installment-linked expenses in this group.
+                   *  When > 0, render a "מהן ₪X בתשלומים" hint so the user
+                   *  knows how much of the cycle is locked into payment
+                   *  plans they've already committed to. */
+                  installments: number;
                   colorClass: string;
                   bgClass: string;
                 }) => (
@@ -364,7 +416,19 @@ export function TransactionsList(props: {
                         <span>{label}</span>
                         <span className="rounded-full bg-current/10 px-1.5 py-0.5 text-[11px] font-medium opacity-80">{count}</span>
                         <span className="ms-auto flex gap-4 tabular-nums font-normal">
-                          {expenses > 0 && <span>הוצאות: <strong className="font-semibold">{formatIls(expenses, { decimals: false })}</strong></span>}
+                          {expenses > 0 && (
+                            <span>
+                              הוצאות: <strong className="font-semibold">{formatIls(expenses, { decimals: false })}</strong>
+                              {installments > 0 && (
+                                <span className="ms-1 inline-flex items-center gap-0.5 text-muted-foreground">
+                                  <CreditCard className="size-3 shrink-0" />
+                                  <span className="text-[11px]">
+                                    מהן <strong className="font-semibold tabular-nums">{formatIls(installments, { decimals: false })}</strong> בתשלומים
+                                  </span>
+                                </span>
+                              )}
+                            </span>
+                          )}
                           {income  > 0 && <span className="text-success">הכנסות: <strong className="font-semibold">{formatIls(income, { decimals: false })}</strong></span>}
                         </span>
                       </div>
@@ -383,6 +447,7 @@ export function TransactionsList(props: {
                           count={immediateTxns.length}
                           expenses={sumExpenses(immediateTxns)}
                           income={sumIncome(immediateTxns)}
+                          installments={sumInstallments(immediateTxns)}
                           colorClass="text-success"
                           bgClass="bg-success/5 border-success/20"
                         />
@@ -401,6 +466,7 @@ export function TransactionsList(props: {
                           count={carryOver.length}
                           expenses={sumExpenses(carryOver)}
                           income={sumIncome(carryOver)}
+                          installments={sumInstallments(carryOver)}
                           colorClass="text-amber-700 dark:text-amber-400"
                           bgClass="bg-amber-50/40 border-amber-200/50 dark:bg-amber-900/10 dark:border-amber-800/30"
                         />
@@ -419,6 +485,7 @@ export function TransactionsList(props: {
                           count={currentCycle.length}
                           expenses={sumExpenses(currentCycle)}
                           income={sumIncome(currentCycle)}
+                          installments={sumInstallments(currentCycle)}
                           colorClass={isCycleCharged ? 'text-success' : 'text-amber-700 dark:text-amber-400'}
                           bgClass={isCycleCharged ? 'bg-success/5 border-success/20' : 'bg-amber-50/60 border-amber-200/60 dark:bg-amber-900/10 dark:border-amber-800/40'}
                         />
@@ -435,6 +502,7 @@ export function TransactionsList(props: {
                           count={nextCycle.length}
                           expenses={sumExpenses(nextCycle)}
                           income={sumIncome(nextCycle)}
+                          installments={sumInstallments(nextCycle)}
                           colorClass="text-blue-700 dark:text-blue-300"
                           bgClass="bg-blue-50/50 border-blue-200/50 dark:bg-blue-900/10 dark:border-blue-800/40"
                         />

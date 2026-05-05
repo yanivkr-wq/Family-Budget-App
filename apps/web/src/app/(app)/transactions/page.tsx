@@ -89,11 +89,21 @@ export default async function TransactionsPage(props: {
       categorySource: schema.transactions.categorySource,
       ruleName: schema.categoryRules.name,
       rulePattern: schema.categoryRules.pattern,
+      // Installment-plan link (null for one-off transactions). When non-null,
+      // we surface a "תשלום N/Y · עד MM/YY" pill on the row.
+      installmentPlanId:           schema.transactions.installmentPlanId,
+      installmentCurrentPaymentNo: schema.installmentPlans.currentPaymentNo,
+      installmentTotalPayments:    schema.installmentPlans.totalPayments,
+      installmentEndMonth:         schema.installmentPlans.projectedEndMonth,
     })
     .from(schema.transactions)
     .leftJoin(
       schema.categoryRules,
       eq(schema.transactions.appliedRuleId, schema.categoryRules.id),
+    )
+    .leftJoin(
+      schema.installmentPlans,
+      eq(schema.transactions.installmentPlanId, schema.installmentPlans.id),
     )
     .where(
       and(
@@ -294,6 +304,10 @@ export default async function TransactionsPage(props: {
           categorySource: t.categorySource,
           ruleName: t.ruleName ?? t.rulePattern ?? null,
           isManual: t.isManual,
+          installmentPlanId:           t.installmentPlanId,
+          installmentCurrentPaymentNo: t.installmentCurrentPaymentNo,
+          installmentTotalPayments:    t.installmentTotalPayments,
+          installmentEndMonth:         t.installmentEndMonth,
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}
