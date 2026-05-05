@@ -24,6 +24,7 @@ import {
   BadgeAlert,
   CreditCard,
   Banknote,
+  Repeat,
   PiggyBank,
   Sparkles,
   ChevronLeft,
@@ -336,6 +337,32 @@ export default async function DashboardPage(props: {
       ),
   ]);
 
+  // ── Active recurring patterns (subscriptions / monthly bills). Used for
+  // both the dashboard tile and the "recurring as % of income" insight. ─────
+  const activeRecurringPatterns = await db
+    .select({
+      expectedAmountIls: schema.recurringPatterns.expectedAmountIls,
+      frequency:         schema.recurringPatterns.frequency,
+    })
+    .from(schema.recurringPatterns)
+    .where(
+      and(
+        eq(schema.recurringPatterns.householdId, householdId),
+        eq(schema.recurringPatterns.status, 'active'),
+      ),
+    );
+
+  // Sum of EXPENSE-side recurring patterns, normalised to monthly equivalent
+  // (bimonthly ÷ 2, quarterly ÷ 3, yearly ÷ 12) so the tile is comparable
+  // month-to-month regardless of cadence.
+  const FREQ_TO_MONTHLY: Record<string, number> = { monthly: 1, bimonthly: 0.5, quarterly: 1 / 3, yearly: 1 / 12 };
+  const recurringMonthlyExpense = activeRecurringPatterns.reduce((s, p) => {
+    const v = Number(p.expectedAmountIls);
+    if (v >= 0) return s; // skip income-side patterns
+    const factor = FREQ_TO_MONTHLY[p.frequency] ?? 1;
+    return s + Math.abs(v) * factor;
+  }, 0);
+
   const dashboardTxns: DashboardTx[] = recentTxRaw.map((t) => {
     const cat = t.categoryId ? catMap.get(t.categoryId) : undefined;
     return {
@@ -386,6 +413,7 @@ export default async function DashboardPage(props: {
     daysLeft,
     month,
     spent,
+    recurringMonthlyExpense,
   });
 
   const donutData = budgetRows
@@ -465,7 +493,7 @@ export default async function DashboardPage(props: {
         </div>
       )}
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <Tile
           label={he.dashboard.spentSoFar}
           value={formatIls(spent, { decimals: false })}
@@ -506,6 +534,20 @@ export default async function DashboardPage(props: {
               : projectedThisMonth > 0
                 ? 'תקציב צפוי לחודש'
                 : undefined
+          }
+        />
+        {/* Recurring monthly — total of all active recurring patterns,
+            normalised to a monthly equivalent. Caption shows what % of the
+            month's income that locks in. */}
+        <Tile
+          label="הוצאות קבועות חודשיות"
+          value={formatIls(recurringMonthlyExpense, { decimals: false })}
+          tone={recurringMonthlyExpense > 0 ? 'accent' : 'neutral'}
+          icon={<Repeat className="size-3.5" />}
+          caption={
+            totalIncome > 0
+              ? `${Math.round((recurringMonthlyExpense / totalIncome) * 100)}% מההכנסות`
+              : undefined
           }
         />
       </section>
@@ -758,11 +800,15 @@ function computeInsights(args: {
   daysLeft:                 number;
   month:                    string;
   spent:                    number;
+  /** Sum of EXPENSE-side active recurring patterns, normalised to monthly.
+   *  Used for the "recurring eats N% of income" alert. */
+  recurringMonthlyExpense:  number;
 }): Insight[] {
   const {
     budgetRows, prevTotals, endingPlans, activeInstallmentPlans,
     projectedEom, hasEnoughDataForProjection, totalIncome,
     isCurrentMonth, day, daysInMonth, daysLeft, month, spent,
+    recurringMonthlyExpense,
   } = args;
 
   // Helper to format ILS without decimals — used a lot in explanations below.
@@ -968,6 +1014,34 @@ function computeInsights(args: {
             `מאחר שעברנו את אמצע החודש ועדיין מתחת ל-60% מהתקציב הכולל, אתה במסלול טוב. ${ils(totalTarget - spent)} עדיין זמינים עד סוף החודש.`,
         });
       }
+    }
+  }
+
+  // ⑨ Recurring expenses eat too much of monthly income
+  // Severity bumps from info → warning at 50%, warning → critical at 70%.
+  if (totalIncome > 0 && recurringMonthlyExpense > 0) {
+    const pct = recurringMonthlyExpense / totalIncome;
+    if (pct >= 0.5) {
+      const pctRound = Math.round(pct * 100);
+      const severity: InsightSeverity = pct >= 0.7 ? 'critical' : 'warning';
+      insights.push({
+        id: 'recurring-share',
+        severity,
+        icon: Repeat,
+        title: `הוצאות קבועות = ${pctRound}% מההכנסות`,
+        body: `${ils(recurringMonthlyExpense)} מתוך ${ils(totalIncome)} כבר מחויבים בכל חודש`,
+        explanation:
+          `סכמתי את כל ההוצאות הקבועות הפעילות (תבניות חוזרות עם status='active'),\n` +
+          `נירמלתי לסכום חודשי (דו-חודשי ÷ 2, רבעוני ÷ 3, שנתי ÷ 12),\n` +
+          `והשוויתי לסך ההכנסות שנרשמו החודש.\n` +
+          `\n` +
+          `• הוצאות קבועות חודשיות: ${ils(recurringMonthlyExpense)}\n` +
+          `• הכנסות החודש: ${ils(totalIncome)}\n` +
+          `• יחס: ${ils(recurringMonthlyExpense)} ÷ ${ils(totalIncome)} = ${pctRound}%\n` +
+          `\n` +
+          `סף התראה ${pct >= 0.7 ? '70%' : '50%'} — מעל סף זה, נשאר פחות מקום בתקציב להוצאות גמישות (אוכל בחוץ, חופשות, מתנות).`,
+        href: '/recurring',
+      });
     }
   }
 

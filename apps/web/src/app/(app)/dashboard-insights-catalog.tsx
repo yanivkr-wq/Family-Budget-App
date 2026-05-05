@@ -26,6 +26,7 @@ import {
   PartyPopper,
   Wallet,
   Sparkles,
+  Repeat,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -101,6 +102,14 @@ const INSIGHT_CATALOG: CatalogEntry[] = [
     title: 'תקציב בשליטה מצוינת',
     trigger:
       'נדלק לאחר ה-15 בחודש כששיעור השימוש הכולל בתקציב מתחת ל-60%. מציין שאתה במסלול טוב לחיסכון.',
+  },
+  {
+    id: 'recurring-share',
+    icon: Repeat,
+    severity: 'warning',
+    title: 'הוצאות קבועות צורכות חלק גדול מההכנסות',
+    trigger:
+      'נדלק כשסך ההוצאות הקבועות החודשיות (משכנתא, ארנונה, מנויים וכד׳) עוברות 50% מההכנסות. הופך לקריטי מעל 70%.',
   },
 ];
 

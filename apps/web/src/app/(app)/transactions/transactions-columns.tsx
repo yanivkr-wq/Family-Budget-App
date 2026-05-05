@@ -46,6 +46,7 @@ import { cn } from '@/lib/utils';
 export type ColumnId =
   | 'date'
   | 'merchant'
+  | 'flag'
   | 'account'
   | 'source'
   | 'category'
@@ -130,51 +131,57 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
+    // Pure merchant text now — installment / recurring pills moved to the
+    // dedicated "תג" column so the merchant column stays clean and skim-able.
+    renderCell: ({ t }) => <>{t.merchant}</>,
+  },
+
+  flag: {
+    id: 'flag',
+    label: 'תג',
+    defaultVisible: true,
+    headClass: 'border-b px-3 py-2 font-medium',
+    cellClass: 'px-3 py-2 align-top',
     renderCell: ({ t, isInstallment }) => {
-      // Recurring pill is mutually exclusive with the installment pill —
-      // installments take precedence (more specific signal: they end after
-      // N payments, recurring goes on indefinitely).
+      // Installment + recurring are mutually exclusive — installments take
+      // precedence as the more specific signal (they end after N payments).
       const isRecurring = !isInstallment && !!t.recurringPatternId;
-      return (
-        // Stacked layout to mirror the category column (cat on top, sub-cat
-        // below): merchant on top, status pill below — both anchored to
-        // the right (start in RTL) so they line up consistently regardless
-        // of merchant text length.
-        <div className="flex flex-col items-start gap-0.5">
-          <span>{t.merchant}</span>
-          {isInstallment && (
-            <Link
-              href="/installments"
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
-              title="חלק מתוכנית תשלומים — פתח את הניהול"
-            >
-              <CreditCard className="size-2.5 shrink-0" />
-              <span>
-                {t.installmentTotalPayments
-                  ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
-                  : `תשלום ${t.installmentCurrentPaymentNo}`}
+      if (isInstallment) {
+        return (
+          <Link
+            href="/installments"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+            title="חלק מתוכנית תשלומים — פתח את הניהול"
+          >
+            <CreditCard className="size-2.5 shrink-0" />
+            <span>
+              {t.installmentTotalPayments
+                ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
+                : `תשלום ${t.installmentCurrentPaymentNo}`}
+            </span>
+            {t.installmentEndMonth && (
+              <span className="opacity-70">
+                · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
               </span>
-              {t.installmentEndMonth && (
-                <span className="opacity-70">
-                  · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
-                </span>
-              )}
-            </Link>
-          )}
-          {isRecurring && (
-            <Link
-              href="/recurring"
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/25"
-              title="תואם להוצאה קבועה — פתח את הניהול"
-            >
-              <Repeat className="size-2.5 shrink-0" />
-              <span>קבוע</span>
-            </Link>
-          )}
-        </div>
-      );
+            )}
+          </Link>
+        );
+      }
+      if (isRecurring) {
+        return (
+          <Link
+            href="/recurring"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/25"
+            title="תואם להוצאה קבועה — פתח את הניהול"
+          >
+            <Repeat className="size-2.5 shrink-0" />
+            <span>קבוע</span>
+          </Link>
+        );
+      }
+      return <span className="text-muted-foreground">—</span>;
     },
   },
 
@@ -262,7 +269,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
   },
 };
 
-export const DEFAULT_ORDER: ColumnId[] = ['date', 'merchant', 'account', 'source', 'category', 'expense', 'income', 'notes'];
+export const DEFAULT_ORDER: ColumnId[] = ['date', 'merchant', 'flag', 'account', 'source', 'category', 'expense', 'income', 'notes'];
 
 // ─── Hook: load/save user prefs from localStorage ────────────────────────────
 

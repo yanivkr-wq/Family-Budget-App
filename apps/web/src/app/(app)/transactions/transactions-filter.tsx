@@ -8,6 +8,8 @@ export interface FilterState {
   categoryId: string;
   accountId: string;
   sign: 'all' | 'expense' | 'income';
+  /** Filter rows by their flag: any / recurring / installment / one-off. */
+  flag: 'all' | 'recurring' | 'installment' | 'one-off';
   dateFrom: string;
   dateTo: string;
 }
@@ -17,6 +19,7 @@ export const emptyFilter: FilterState = {
   categoryId: '',
   accountId: '',
   sign: 'all',
+  flag: 'all',
   dateFrom: '',
   dateTo: '',
 };
@@ -27,6 +30,7 @@ export function isFilterActive(f: FilterState): boolean {
     f.categoryId !== '' ||
     f.accountId !== '' ||
     f.sign !== 'all' ||
+    f.flag !== 'all' ||
     f.dateFrom !== '' ||
     f.dateTo !== ''
   );
@@ -110,6 +114,19 @@ export function TransactionsFilter(props: {
           <option value="all">הכנסות + הוצאות</option>
           <option value="expense">הוצאות בלבד</option>
           <option value="income">הכנסות בלבד</option>
+        </select>
+
+        {/* Flag — recurring / installment / one-off */}
+        <select
+          value={filter.flag}
+          onChange={(e) => set({ flag: e.target.value as FilterState['flag'] })}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+          title="סנן לפי תג"
+        >
+          <option value="all">כל התגים</option>
+          <option value="recurring">קבועות בלבד</option>
+          <option value="installment">תשלומים בלבד</option>
+          <option value="one-off">חד-פעמיות בלבד</option>
         </select>
 
         {/* Date from */}

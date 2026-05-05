@@ -33,7 +33,21 @@ interface ViewOption {
   stripeClass: string;
 }
 
+// Order: combined first (the default "everything together" view), then
+// personal, then business. The order matches how users typically scan
+// (broadest → narrowest).
 export const VIEW_OPTIONS: ViewOption[] = [
+  {
+    value:    'combined',
+    label:    'משולב',
+    icon:     Users,
+    helpText: 'הכל ביחד, ללא ספירה כפולה של העברות',
+    // Calm violet — distinct from blue (personal) and slate (business),
+    // doesn't compete with the app's semantic colors. Cooler / quieter
+    // than the previous rose; reads as a neutral "everything together".
+    activeClass: 'bg-violet-200 text-violet-900 dark:bg-violet-900/60 dark:text-violet-100',
+    stripeClass: 'bg-violet-400 dark:bg-violet-500',
+  },
   {
     value:    'personal',
     label:    'אישי',
@@ -49,17 +63,6 @@ export const VIEW_OPTIONS: ViewOption[] = [
     helpText: 'חשבונות עסקיים בלבד',
     activeClass: 'bg-slate-300 text-slate-900 dark:bg-slate-600 dark:text-slate-100',
     stripeClass: 'bg-slate-500 dark:bg-slate-400',
-  },
-  {
-    value:    'combined',
-    label:    'משולב',
-    icon:     Users,
-    helpText: 'הכל ביחד, ללא ספירה כפולה של העברות',
-    // Rose — warm enough to clearly differ from blue/slate, but more refined
-    // than the previous orange. Doesn't conflict with the app's semantic
-    // colors (success green / warning amber / destructive red).
-    activeClass: 'bg-rose-200 text-rose-900 dark:bg-rose-900/60 dark:text-rose-100',
-    stripeClass: 'bg-rose-500 dark:bg-rose-500',
   },
 ];
 

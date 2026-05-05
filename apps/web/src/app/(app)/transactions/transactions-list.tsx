@@ -123,6 +123,9 @@ export function TransactionsList(props: {
       if (filter.accountId && t.accountId !== filter.accountId) return false;
       if (filter.sign === 'expense' && t.amount >= 0) return false;
       if (filter.sign === 'income' && t.amount < 0) return false;
+      if (filter.flag === 'recurring'   && !t.recurringPatternId) return false;
+      if (filter.flag === 'installment' && !t.installmentPlanId)  return false;
+      if (filter.flag === 'one-off'     && (t.recurringPatternId || t.installmentPlanId)) return false;
       if (filter.dateFrom && t.date < filter.dateFrom) return false;
       if (filter.dateTo && t.date > filter.dateTo) return false;
       return true;
