@@ -55,8 +55,11 @@ export const VIEW_OPTIONS: ViewOption[] = [
     label:    'משולב',
     icon:     Users,
     helpText: 'הכל ביחד, ללא ספירה כפולה של העברות',
-    activeClass: 'bg-primary-soft text-primary',
-    stripeClass: 'bg-primary/70',
+    // Distinct from personal (blue) and business (slate). Purple reads as
+    // "all of it together" without competing with the app's semantic colors
+    // (success green / warning amber / destructive red).
+    activeClass: 'bg-purple-200 text-purple-900 dark:bg-purple-900/60 dark:text-purple-100',
+    stripeClass: 'bg-purple-500 dark:bg-purple-500',
   },
 ];
 
