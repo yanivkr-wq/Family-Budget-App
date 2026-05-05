@@ -338,12 +338,15 @@ export default async function DashboardPage(props: {
       ),
   ]);
 
-  // ── Active recurring patterns (subscriptions / monthly bills). Used for
-  // both the dashboard tile and the "recurring as % of income" insight. ─────
+  // ── Active recurring patterns (subscriptions / monthly bills). Used by
+  // the KPI tile, the dedicated dashboard widget below, and the
+  // "recurring as % of income" insight. ────────────────────────────────────
   const activeRecurringPatterns = await db
     .select({
-      expectedAmountIls: schema.recurringPatterns.expectedAmountIls,
-      frequency:         schema.recurringPatterns.frequency,
+      merchantNormalized: schema.recurringPatterns.merchantNormalized,
+      categoryId:         schema.recurringPatterns.categoryId,
+      expectedAmountIls:  schema.recurringPatterns.expectedAmountIls,
+      frequency:          schema.recurringPatterns.frequency,
     })
     .from(schema.recurringPatterns)
     .where(
@@ -353,16 +356,32 @@ export default async function DashboardPage(props: {
       ),
     );
 
-  // Sum of EXPENSE-side recurring patterns, normalised to monthly equivalent
-  // (bimonthly ÷ 2, quarterly ÷ 3, yearly ÷ 12) so the tile is comparable
-  // month-to-month regardless of cadence.
+  // Normalise each pattern to its monthly equivalent so all sums compare
+  // apples-to-apples regardless of cadence (bimonthly ÷ 2, quarterly ÷ 3,
+  // yearly ÷ 12).
   const FREQ_TO_MONTHLY: Record<string, number> = { monthly: 1, bimonthly: 0.5, quarterly: 1 / 3, yearly: 1 / 12 };
-  const recurringMonthlyExpense = activeRecurringPatterns.reduce((s, p) => {
+  const recurringMonthly = activeRecurringPatterns.map((p) => {
     const v = Number(p.expectedAmountIls);
-    if (v >= 0) return s; // skip income-side patterns
     const factor = FREQ_TO_MONTHLY[p.frequency] ?? 1;
-    return s + Math.abs(v) * factor;
-  }, 0);
+    return {
+      merchantNormalized: p.merchantNormalized,
+      categoryId:         p.categoryId,
+      monthly:            v * factor, // negative for expense, positive for income
+      frequency:          p.frequency,
+    };
+  });
+  const recurringMonthlyExpense = recurringMonthly
+    .filter((p) => p.monthly < 0)
+    .reduce((s, p) => s + Math.abs(p.monthly), 0);
+  const recurringMonthlyIncome = recurringMonthly
+    .filter((p) => p.monthly > 0)
+    .reduce((s, p) => s + p.monthly, 0);
+  // Top 5 biggest expense-side patterns for the "where the money goes" list
+  // in the recurring widget below.
+  const topRecurringExpenses = recurringMonthly
+    .filter((p) => p.monthly < 0)
+    .sort((a, b) => a.monthly - b.monthly) // most-negative first
+    .slice(0, 5);
 
   const dashboardTxns: DashboardTx[] = recentTxRaw.map((t) => {
     const cat = t.categoryId ? catMap.get(t.categoryId) : undefined;
@@ -588,6 +607,105 @@ export default async function DashboardPage(props: {
 
       {/* ── AI Insights widget ── */}
       <InsightsWidget insights={insights} month={month} />
+
+      {/* ── Recurring expenses overview — sits between Insights and Savings.
+          Hides itself when there are no active recurring patterns yet. ── */}
+      {activeRecurringPatterns.length > 0 && (
+        <section className="tile space-y-4" dir="rtl">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Repeat className="size-4" />
+              הוצאות קבועות (תמונת מצב חודשית)
+            </h2>
+            <Link
+              href="/recurring"
+              className="text-xs text-primary hover:underline"
+              title="ניהול הוצאות קבועות"
+            >
+              ניהול ←
+            </Link>
+          </div>
+
+          {/* Three numbers */}
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">הוצאות חודשיות</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                {formatIls(recurringMonthlyExpense, { decimals: false })}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">הכנסות חודשיות</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums text-success">
+                {formatIls(recurringMonthlyIncome, { decimals: false })}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">תזרים נטו צפוי</p>
+              <p className={cn(
+                'mt-0.5 text-lg font-semibold tabular-nums',
+                recurringMonthlyIncome - recurringMonthlyExpense >= 0 ? 'text-success' : 'text-destructive',
+              )}>
+                {formatIls(recurringMonthlyIncome - recurringMonthlyExpense, { decimals: false })}
+              </p>
+            </div>
+          </div>
+
+          {/* Visual ratio bar — what % of monthly income is "locked" by
+              recurring expenses. Tone shifts as the share grows. */}
+          {recurringMonthlyIncome > 0 && (() => {
+            const pct = Math.min(100, Math.round((recurringMonthlyExpense / recurringMonthlyIncome) * 100));
+            const tone =
+              pct >= 70 ? 'bg-destructive'
+              : pct >= 50 ? 'bg-warning'
+              : 'bg-primary';
+            return (
+              <div className="space-y-1">
+                <div className="flex items-baseline justify-between text-xs">
+                  <span className="text-muted-foreground">חלק קבוע מההכנסות</span>
+                  <span className="font-semibold tabular-nums">{pct}%</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div className={cn('h-full transition-all', tone)} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Top 5 biggest recurring expenses — quick "where the money goes" */}
+          {topRecurringExpenses.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                ההוצאות הגדולות ביותר
+              </p>
+              <ul className="divide-y rounded-md border">
+                {topRecurringExpenses.map((p) => {
+                  const cat = p.categoryId ? catMap.get(p.categoryId) : null;
+                  return (
+                    <li key={p.merchantNormalized} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium">{p.merchantNormalized}</span>
+                        {cat && (
+                          <span
+                            className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                            style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
+                          >
+                            {cat.nameHe}
+                          </span>
+                        )}
+                      </div>
+                      <span className="shrink-0 font-semibold tabular-nums">
+                        {formatIls(Math.abs(p.monthly), { decimals: false })}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── Savings snapshot ── */}
       {activeGoals.length > 0 && (
