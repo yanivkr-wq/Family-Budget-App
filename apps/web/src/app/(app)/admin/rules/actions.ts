@@ -21,6 +21,13 @@ interface RuleFormInput {
   subCategoryId?: string | null;
   priority?: number;
   isActive?: boolean;
+  /** When true, the merchant matched by this rule is ALSO registered as a
+   *  recurring expense (or income) → shows up on /recurring and gets the
+   *  קבוע badge in transactions. */
+  markAsRecurring?: boolean;
+  recurringExpectedAmount?: number | null;
+  recurringFrequency?: 'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
+  recurringSign?: 'expense' | 'income';
 }
 
 function parseForm(formData: FormData): RuleFormInput {
@@ -28,7 +35,7 @@ function parseForm(formData: FormData): RuleFormInput {
     if (v === null) return null;
     const s = String(v).trim();
     if (!s) return null;
-    const n = Number(s);
+    const n = Number(s.replace(/,/g, ''));
     return Number.isFinite(n) ? n : null;
   };
   return {
@@ -46,7 +53,102 @@ function parseForm(formData: FormData): RuleFormInput {
     subCategoryId: (formData.get('subCategoryId') as string) || null,
     priority: Number(formData.get('priority') ?? 100),
     isActive: formData.get('isActive') !== 'false',
+    markAsRecurring: formData.get('markAsRecurring') === 'true',
+    recurringExpectedAmount: numOrNull(formData.get('recurringExpectedAmount')),
+    recurringFrequency: (formData.get('recurringFrequency') as RuleFormInput['recurringFrequency']) || 'monthly',
+    recurringSign: (formData.get('recurringSign') as RuleFormInput['recurringSign']) || 'expense',
   };
+}
+
+/**
+ * Materialize a recurring expense (or income) pattern from a category-rule
+ * input. Returns the count of recurring rows created.
+ *
+ * Strategy:
+ *   • For `exact` rules → one row, merchantNormalized = rule.pattern (normalized).
+ *   • For `contains` / `starts_with` / `regex` rules → query the matching
+ *     transactions and create one recurring pattern PER distinct
+ *     merchantNormalized found. This way "Spotify Israel Ltd" and
+ *     "Spotify P10202" both get tagged קבוע by the existing recurring-join
+ *     in /transactions even though they share one rule.
+ *   • If no transactions yet match (fresh rule before any import) → fall
+ *     back to one row using normalizeMerchant(pattern) so future imports
+ *     of an EXACT-matching merchant get the badge.
+ *
+ * Uses ON CONFLICT DO NOTHING on the unique(householdId, merchantNormalized)
+ * index so re-saves don't error and existing manual entries aren't
+ * clobbered.
+ */
+async function createRecurringFromRule(
+  db: ReturnType<typeof getDb>,
+  householdId: string,
+  rule: { pattern: string; matchType: string; categoryId: string },
+  recurring: {
+    expectedAmount: number | null;
+    frequency: 'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
+    sign: 'expense' | 'income';
+  },
+): Promise<number> {
+  const amount = Math.max(Number(recurring.expectedAmount ?? 0), 0);
+  const signedAmount = recurring.sign === 'income' ? amount : -amount;
+  const month = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+
+  // Decide which merchantNormalized values to materialize.
+  let merchantList: string[] = [];
+
+  if (rule.matchType === 'exact') {
+    merchantList = [normalizeMerchant(rule.pattern)];
+  } else {
+    // Pull distinct merchantNormalized values from existing matching txns.
+    // Using the same predicates as the rules engine for consistency.
+    const lcPattern = rule.pattern.toLowerCase();
+    const conditions = [
+      eq(schema.transactions.householdId, householdId),
+      isNull(schema.transactions.deletedAt),
+    ];
+    if (rule.matchType === 'contains') {
+      conditions.push(ilike(schema.transactions.merchantNormalized, `%${lcPattern}%`));
+    } else if (rule.matchType === 'starts_with') {
+      conditions.push(ilike(schema.transactions.merchantNormalized, `${lcPattern}%`));
+    } else if (rule.matchType === 'regex') {
+      conditions.push(sql`${schema.transactions.merchantRaw} ~* ${rule.pattern}`);
+    }
+    const rows = await db
+      .selectDistinct({ m: schema.transactions.merchantNormalized })
+      .from(schema.transactions)
+      .where(and(...conditions))
+      .limit(50); // cap — we don't want to spam /recurring with hundreds of rows
+    merchantList = rows.map((r) => r.m).filter(Boolean);
+
+    // Fallback if nothing matched (fresh rule pre-import)
+    if (merchantList.length === 0) {
+      merchantList = [normalizeMerchant(rule.pattern)];
+    }
+  }
+
+  // Insert each one. Unique constraint takes care of dedup.
+  let created = 0;
+  for (const merchant of merchantList) {
+    if (!merchant) continue;
+    const result = await db.insert(schema.recurringPatterns).values({
+      householdId,
+      merchantNormalized: merchant,
+      categoryId:         rule.categoryId,
+      expectedAmountIls:  String(signedAmount),
+      medianAmountIls:    String(signedAmount),
+      tolerancePct:       10,
+      frequency:          recurring.frequency,
+      occurrenceCount:    0,
+      firstSeenMonth:     month,
+      lastSeenMonth:      month,
+      status:             'active',
+    }).onConflictDoNothing().returning({ id: schema.recurringPatterns.id });
+    if (result.length > 0) created++;
+  }
+  return created;
 }
 
 /** Build a Drizzle SQL condition for a notes-pattern match. Returns null if no pattern set. */
@@ -149,7 +251,7 @@ export async function previewRule(formData: FormData): Promise<RulePreview> {
   };
 }
 
-export async function createRule(formData: FormData): Promise<{ ok: boolean; ruleId?: string; error?: string }> {
+export async function createRule(formData: FormData): Promise<{ ok: boolean; ruleId?: string; error?: string; recurringCreated?: number }> {
   const session = await auth();
   if (!session?.user) return { ok: false, error: 'unauthorized' };
   const db = getDb();
@@ -195,12 +297,28 @@ export async function createRule(formData: FormData): Promise<{ ok: boolean; rul
     await applyRuleToPastTransactions(created!.id);
   }
 
+  // Optionally also register the matching merchant(s) as recurring expenses
+  let recurringCreated = 0;
+  if (r.markAsRecurring) {
+    recurringCreated = await createRecurringFromRule(
+      db,
+      session.user.householdId,
+      { pattern: r.pattern, matchType: r.matchType, categoryId: r.categoryId },
+      {
+        expectedAmount: r.recurringExpectedAmount ?? 0,
+        frequency: r.recurringFrequency ?? 'monthly',
+        sign: r.recurringSign ?? 'expense',
+      },
+    );
+    revalidatePath('/recurring');
+  }
+
   revalidatePath('/admin/rules');
   revalidatePath('/transactions');
-  return { ok: true, ruleId: created!.id };
+  return { ok: true, ruleId: created!.id, recurringCreated };
 }
 
-export async function updateRule(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+export async function updateRule(formData: FormData): Promise<{ ok: boolean; error?: string; recurringCreated?: number }> {
   const session = await auth();
   if (!session?.user) return { ok: false, error: 'unauthorized' };
   const db = getDb();
@@ -239,8 +357,26 @@ export async function updateRule(formData: FormData): Promise<{ ok: boolean; err
     entityId: r.id,
   });
 
+  // If the user re-checked "סמן כקבוע" on edit, materialize the recurring
+  // pattern(s). ON CONFLICT DO NOTHING means existing entries aren't
+  // touched — only new merchants are added.
+  let recurringCreated = 0;
+  if (r.markAsRecurring) {
+    recurringCreated = await createRecurringFromRule(
+      db,
+      session.user.householdId,
+      { pattern: r.pattern, matchType: r.matchType, categoryId: r.categoryId },
+      {
+        expectedAmount: r.recurringExpectedAmount ?? 0,
+        frequency: r.recurringFrequency ?? 'monthly',
+        sign: r.recurringSign ?? 'expense',
+      },
+    );
+    revalidatePath('/recurring');
+  }
+
   revalidatePath('/admin/rules');
-  return { ok: true };
+  return { ok: true, recurringCreated };
 }
 
 export async function deleteRule(formData: FormData): Promise<{ ok: boolean }> {

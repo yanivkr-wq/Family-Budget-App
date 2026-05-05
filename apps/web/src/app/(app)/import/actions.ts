@@ -1103,6 +1103,12 @@ export interface BankExportImportResult {
   /** Rows that received a category from the bank's own ענף / קטגוריה column
    *  via BANK_HINT_TO_OUR_CATEGORY (used as fallback when no user rule fires). */
   bankHintCategorized: number;
+  /** Rows that received a category by keyword-scanning the merchant name
+   *  itself with the BANK_HINT_TO_OUR_CATEGORY patterns (fires when no user
+   *  rule and no bank ענף match). Catches cases like
+   *  "דלק מנטה קמעונאות..." where the bank didn't fill ענף but the merchant
+   *  name itself contains a strong category keyword. */
+  merchantKeywordCategorized: number;
   /** Installment plans auto-created during this import (didn't exist before). */
   newPlansCreated:   number;
   /** Rows linked to an installment plan (newly created OR pre-existing). */
@@ -1258,7 +1264,8 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   const empty = (msg: string, extra: Partial<BankExportImportResult> = {}): BankExportImportResult => ({
     ok: false, templateUsed: null, inserted: 0, duplicates: 0, upgradedDuplicates: 0,
     pendingSkipped: 0, forexRows: 0, installmentRows: 0, rowsParsed: 0,
-    categorizedRows: 0, bankHintCategorized: 0, newPlansCreated: 0, rowsLinkedToPlans: 0,
+    categorizedRows: 0, bankHintCategorized: 0, merchantKeywordCategorized: 0,
+    newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
 
@@ -1423,6 +1430,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   // rules + attach installment_plan_id when applicable. ────────────────────
   let categorizedRows = 0;
   let bankHintCategorized = 0;
+  let merchantKeywordCategorized = 0;
   let rowsLinkedToPlans = 0;
   const inserts = rowMetas.map(({ tx, merchantNorm, billingMonth, installment }) => {
     const ruleResult = applyRules(allRules, {
@@ -1442,6 +1450,19 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     if (!ruleResult && tx.categoryHint) {
       bankHintCategoryId = matchBankHintToCategoryId(tx.categoryHint, topCategoryByName);
       if (bankHintCategoryId) bankHintCategorized++;
+    }
+
+    // Merchant-name keyword fallback: when neither the user rules nor the
+    // bank's ענף column gave us a category, try the SAME pattern map
+    // against the raw merchant string. Catches "דלק מנטה קמעונאות דרכים בע\"מ
+    // בית חנן" — the bank's ענף might be empty or generic, but the merchant
+    // name itself contains "דלק" → fuel category. The patterns are designed
+    // for short labels, so they only fire on strong keyword hits and don't
+    // overreach. Lowest-precedence categorizer before AI.
+    let merchantKeywordCategoryId: string | null = null;
+    if (!ruleResult && !bankHintCategoryId) {
+      merchantKeywordCategoryId = matchBankHintToCategoryId(tx.merchantRaw, topCategoryByName);
+      if (merchantKeywordCategoryId) merchantKeywordCategorized++;
     }
 
     const planId = installment ? planMap.get(installment.fingerprint) ?? null : null;
@@ -1474,6 +1495,12 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         // ['rule', 'llm', 'manual'] and bank hints are deterministic like
         // rules. appliedRuleId stays NULL so a user can later distinguish
         // bank-hint matches from real-rule matches in the UI.
+        categorySource: 'rule' as const,
+      } : merchantKeywordCategoryId ? {
+        categoryId:     merchantKeywordCategoryId,
+        // Same rationale as bank-hint: deterministic match against a
+        // hard-coded keyword map → record as 'rule' source with NULL
+        // applied_rule_id so it's distinguishable from real user rules.
         categorySource: 'rule' as const,
       } : {}),
       externalId: hashRowId(tx.transactionDate, tx.chargeDate, tx.amountIls, tx.merchantRaw, tx.notes),
@@ -1544,6 +1571,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         upgradedDuplicates,
         categorizedRows,
         bankHintCategorized,
+        merchantKeywordCategorized,
         newPlansCreated,
         rowsLinkedToPlans,
         forexRows: parsed.transactions.filter((t) => t.isForex).length,
@@ -1569,6 +1597,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       rowsParsed: parsed.transactions.length,
       categorizedRows,
       bankHintCategorized,
+      merchantKeywordCategorized,
       newPlansCreated,
       rowsLinkedToPlans,
       errors: parsed.errors,

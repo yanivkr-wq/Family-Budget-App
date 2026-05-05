@@ -221,7 +221,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
       cat ? (
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-1 flex-wrap">
-            <span className="pill text-xs" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
+            <span className="pill text-xs whitespace-nowrap" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
             {isAutoRule && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" title={`כלל: ${t.ruleName ?? 'ללא שם'}`}>
                 <Zap className="size-2.5" />כלל

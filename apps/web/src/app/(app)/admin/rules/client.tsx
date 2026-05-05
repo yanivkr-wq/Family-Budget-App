@@ -25,6 +25,7 @@ import {
   ToggleRight,
   MessageSquare,
   Sparkles,
+  Repeat,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -357,6 +358,13 @@ function RuleEditModal(props: {
   const [isActive, setIsActive] = useState(props.rule?.isActive ?? true);
   const [preview, setPreview] = useState<RulePreview | null>(null);
   const [applyToPast, setApplyToPast] = useState(false);
+  // Recurring-tag fields. The user opts in via a checkbox; when enabled we
+  // also write to recurring_pattern so /recurring + the קבוע badge fire on
+  // future imports of the same merchant.
+  const [markAsRecurring, setMarkAsRecurring] = useState(false);
+  const [recurringExpectedAmount, setRecurringExpectedAmount] = useState('');
+  const [recurringFrequency, setRecurringFrequency] = useState<'monthly' | 'bimonthly' | 'quarterly' | 'yearly'>('monthly');
+  const [recurringSign, setRecurringSign] = useState<'expense' | 'income'>('expense');
   const [isPending, startTransition] = useTransition();
 
   const subForCategory = props.subCategories.filter((s) => s.parentId === categoryId);
@@ -377,6 +385,12 @@ function RuleEditModal(props: {
     if (maxAmount) fd.set('maxAmountIls', maxAmount);
     fd.set('categoryId', categoryId);
     if (subCategoryId) fd.set('subCategoryId', subCategoryId);
+    if (markAsRecurring) {
+      fd.set('markAsRecurring', 'true');
+      if (recurringExpectedAmount) fd.set('recurringExpectedAmount', recurringExpectedAmount);
+      fd.set('recurringFrequency', recurringFrequency);
+      fd.set('recurringSign', recurringSign);
+    }
     fd.set('priority', priority);
     fd.set('isActive', String(isActive));
     return fd;
@@ -394,11 +408,19 @@ function RuleEditModal(props: {
     const fd = buildFormData();
     if (!props.rule?.id && applyToPast) fd.set('applyToPast', 'true');
     startTransition(async () => {
+      let recurringCreated = 0;
       if (props.rule?.id) {
-        await updateRule(fd);
+        const r = await updateRule(fd);
+        recurringCreated = r.recurringCreated ?? 0;
         if (applyToPast) await applyRuleToPastTransactions(props.rule.id);
       } else {
-        await createRule(fd);
+        const r = await createRule(fd);
+        recurringCreated = r.recurringCreated ?? 0;
+      }
+      if (markAsRecurring && recurringCreated > 0) {
+        // Brief inline confirmation. Browser alert is fine for this rare,
+        // explicit user action — no need for a toast system yet.
+        alert(`✓ נוצרו ${recurringCreated} רישומי הוצאה קבועה. ניתן לערוך אותם ב-/recurring.`);
       }
       props.onClose();
     });
@@ -537,6 +559,69 @@ function RuleEditModal(props: {
             <input type="checkbox" checked={applyToPast} onChange={(e) => setApplyToPast(e.target.checked)} />
             <span>החל את הכלל גם על תנועות עבר תואמות (backfill)</span>
           </label>
+
+          {/* ── Mark as recurring expense ── */}
+          <div className="col-span-full rounded-md border border-dashed border-primary/40 bg-primary/5 p-3 space-y-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={markAsRecurring}
+                onChange={(e) => setMarkAsRecurring(e.target.checked)}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-1.5 font-medium text-primary">
+                  <Repeat className="size-3.5" />
+                  <span>סמן בית עסק זה כהוצאה קבועה (קבע)</span>
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  ייווצר רישום ב-<a href="/recurring" className="underline" target="_blank" rel="noopener">הוצאות קבועות</a> וכל
+                  התנועות התואמות (כולל ייבואים עתידיים) יקבלו את התג &quot;קבוע&quot;.
+                  לכללים מסוג <em>מכיל / מתחיל ב</em> ניצור רישום לכל בית עסק שכבר תואם בעבר.
+                </p>
+              </div>
+            </label>
+
+            {markAsRecurring && (
+              <div className="grid grid-cols-3 gap-2 ps-6">
+                <div className="space-y-1">
+                  <label className="form-label">סוג</label>
+                  <select
+                    value={recurringSign}
+                    onChange={(e) => setRecurringSign(e.target.value as 'expense' | 'income')}
+                    className="form-input text-sm"
+                  >
+                    <option value="expense">הוצאה</option>
+                    <option value="income">הכנסה</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="form-label">סכום צפוי (₪)</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={recurringExpectedAmount}
+                    onChange={(e) => setRecurringExpectedAmount(e.target.value)}
+                    placeholder="לדוגמה: 21.90"
+                    className="form-input text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="form-label">תדירות</label>
+                  <select
+                    value={recurringFrequency}
+                    onChange={(e) => setRecurringFrequency(e.target.value as typeof recurringFrequency)}
+                    className="form-input text-sm"
+                  >
+                    <option value="monthly">חודשי</option>
+                    <option value="bimonthly">דו-חודשי</option>
+                    <option value="quarterly">רבעוני</option>
+                    <option value="yearly">שנתי</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {preview && (
