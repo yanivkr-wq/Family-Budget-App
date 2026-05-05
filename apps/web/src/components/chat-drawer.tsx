@@ -34,7 +34,10 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
   const [isPending, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Cmd/Ctrl + K toggles the drawer.
+  // Cmd/Ctrl + K toggles the drawer. Also listens for a custom `fba:open-chat`
+  // event so other components (dashboard hint cards, etc.) can request the
+  // drawer to open without prop-drilling state. Dispatch like:
+  //   window.dispatchEvent(new CustomEvent('fba:open-chat'))
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -42,8 +45,15 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         setOpen((o) => !o);
       }
     }
+    function onOpen() {
+      setOpen(true);
+    }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('fba:open-chat', onOpen);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('fba:open-chat', onOpen);
+    };
   }, []);
 
   useEffect(() => {
