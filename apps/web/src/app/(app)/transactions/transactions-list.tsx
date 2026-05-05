@@ -250,6 +250,14 @@ export function TransactionsList(props: {
                   // Bank rows are never "pending" — the charge happened immediately
                   const effectiveChargeDate = isImmediateRow ? null : (t.chargeDate ?? groupChargeDate);
                   const isPendingCharge     = !isImmediateRow && !!effectiveChargeDate && effectiveChargeDate > todayStr;
+                  // Only surface a per-row charge-date badge when the row's
+                  // charge date DIVERGES from the group's default (e.g., a
+                  // foreign-currency CC charge with a custom date). When it
+                  // matches the group, the section header already tells the
+                  // user when the cycle bills — no point repeating it on
+                  // every row.
+                  const chargeDateDiffersFromGroup =
+                    !isImmediateRow && !!t.chargeDate && t.chargeDate !== groupChargeDate;
 
                   const isAutoRule   = t.categorySource === 'rule';
                   const isLlm        = t.categorySource === 'llm';
@@ -272,28 +280,22 @@ export function TransactionsList(props: {
                         <input type="checkbox" checked={isSelected} onChange={(e) => toggleOne(t.id, e.target.checked)} />
                       </td>
 
-                      {/* Date + charge-type badge */}
+                      {/* Date — clean, no per-row charge badge in the common
+                          case. The section header already labels when the
+                          group bills. We only surface a row-level badge when
+                          the row's chargeDate diverges from the group default
+                          (rare — e.g., foreign-currency CC). */}
                       <td className="px-3 py-2 align-top tabular-nums">
                         <div>{formatDateHe(t.date)}</div>
-                        {isImmediateRow ? (
-                          /* Bank direct — money left on transaction date */
-                          <div
-                            className="mt-0.5 inline-flex items-center gap-0.5 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success"
-                            title="חויב מיידית — כסף יצא ביום העסקה"
-                          >
-                            <Zap className="size-2.5 shrink-0" />
-                            מיידי
-                          </div>
-                        ) : isPendingCharge ? (
-                          /* CC — future charge date */
+                        {chargeDateDiffersFromGroup && isPendingCharge && (
                           <div
                             className="mt-0.5 inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                            title={`עדיין לא חויב — תאריך חיוב: ${effectiveChargeDate}`}
+                            title={`חיוב יחיד בתאריך אחר מהקבוצה: ${effectiveChargeDate}`}
                           >
                             <Clock className="size-2.5 shrink-0" />
                             יחויב {formatDateHe(effectiveChargeDate!)}
                           </div>
-                        ) : null}
+                        )}
                       </td>
 
                       <td className="px-3 py-2 align-top">
@@ -461,8 +463,8 @@ export function TransactionsList(props: {
                         <SectionHeader
                           icon={<Clock className="size-3.5 shrink-0" />}
                           label={isCycleCharged
-                            ? `מחודש קודם — חויב ב-${cycleDateLabel}`
-                            : `מחודש קודם — אותו חיוב (${cycleDateLabel})`}
+                            ? `מחודש קודם — חויבו ב-${cycleDateLabel}`
+                            : `מחודש קודם — יחוייבו ב-${cycleDateLabel}`}
                           count={carryOver.length}
                           expenses={sumExpenses(carryOver)}
                           income={sumIncome(carryOver)}
@@ -480,8 +482,8 @@ export function TransactionsList(props: {
                         <SectionHeader
                           icon={<Clock className="size-3.5 shrink-0" />}
                           label={isCycleCharged
-                            ? `חויב ב-${cycleDateLabel} · ימים 1–10`
-                            : `יחויב ב-${cycleDateLabel} · ימים 1–10`}
+                            ? `חויבו ב-${cycleDateLabel}`
+                            : `יחוייבו ב-${cycleDateLabel}`}
                           count={currentCycle.length}
                           expenses={sumExpenses(currentCycle)}
                           income={sumIncome(currentCycle)}
@@ -498,7 +500,7 @@ export function TransactionsList(props: {
                       <>
                         <SectionHeader
                           icon={<CalendarClock className="size-3.5 shrink-0" />}
-                          label={`חיוב הבא — ${nextCycleDateLabel} · ימים 11+`}
+                          label={`יחוייבו בחודש הבא — ${nextCycleDateLabel}`}
                           count={nextCycle.length}
                           expenses={sumExpenses(nextCycle)}
                           income={sumIncome(nextCycle)}
