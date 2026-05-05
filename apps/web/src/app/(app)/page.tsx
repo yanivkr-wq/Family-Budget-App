@@ -608,186 +608,11 @@ export default async function DashboardPage(props: {
       {/* ── AI Insights widget ── */}
       <InsightsWidget insights={insights} month={month} />
 
-      {/* ── Side-by-side row: Recurring overview + Savings snapshot ──
-          Both are "monthly informational" widgets with similar visual
-          weight — pairing them on wide screens keeps the dashboard
-          dense without losing readability. Stacks vertically on
-          smaller screens. The wrapper renders only when at least one
-          of the two has data; each child still has its own self-hide
-          for when it's empty. ── */}
-      {(activeRecurringPatterns.length > 0 || activeGoals.length > 0) && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      {activeRecurringPatterns.length > 0 && (
-        <section className="tile space-y-4" dir="rtl">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <Repeat className="size-4" />
-              הוצאות קבועות (תמונת מצב חודשית)
-            </h2>
-            <Link
-              href="/recurring"
-              className="text-xs text-primary hover:underline"
-              title="ניהול הוצאות קבועות"
-            >
-              ניהול ←
-            </Link>
-          </div>
-
-          {/* Three numbers */}
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <p className="text-xs text-muted-foreground">הוצאות חודשיות</p>
-              <p className="mt-0.5 text-lg font-semibold tabular-nums">
-                {formatIls(recurringMonthlyExpense, { decimals: false })}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">הכנסות חודשיות</p>
-              <p className="mt-0.5 text-lg font-semibold tabular-nums text-success">
-                {formatIls(recurringMonthlyIncome, { decimals: false })}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">תזרים נטו צפוי</p>
-              <p className={cn(
-                'mt-0.5 text-lg font-semibold tabular-nums',
-                recurringMonthlyIncome - recurringMonthlyExpense >= 0 ? 'text-success' : 'text-destructive',
-              )}>
-                {formatIls(recurringMonthlyIncome - recurringMonthlyExpense, { decimals: false })}
-              </p>
-            </div>
-          </div>
-
-          {/* Visual ratio bar — what % of monthly income is "locked" by
-              recurring expenses. Tone shifts as the share grows. */}
-          {recurringMonthlyIncome > 0 && (() => {
-            const pct = Math.min(100, Math.round((recurringMonthlyExpense / recurringMonthlyIncome) * 100));
-            const tone =
-              pct >= 70 ? 'bg-destructive'
-              : pct >= 50 ? 'bg-warning'
-              : 'bg-primary';
-            return (
-              <div className="space-y-1">
-                <div className="flex items-baseline justify-between text-xs">
-                  <span className="text-muted-foreground">חלק קבוע מההכנסות</span>
-                  <span className="font-semibold tabular-nums">{pct}%</span>
-                </div>
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div className={cn('h-full transition-all', tone)} style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Top 5 biggest recurring expenses — quick "where the money goes" */}
-          {topRecurringExpenses.length > 0 && (
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                ההוצאות הגדולות ביותר
-              </p>
-              <ul className="divide-y rounded-md border">
-                {topRecurringExpenses.map((p) => {
-                  const cat = p.categoryId ? catMap.get(p.categoryId) : null;
-                  return (
-                    <li key={p.merchantNormalized} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate font-medium">{p.merchantNormalized}</span>
-                        {cat && (
-                          <span
-                            className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                            style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
-                          >
-                            {cat.nameHe}
-                          </span>
-                        )}
-                      </div>
-                      <span className="shrink-0 font-semibold tabular-nums">
-                        {formatIls(Math.abs(p.monthly), { decimals: false })}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ── Savings snapshot — paired side-by-side with Recurring above. ── */}
-      {activeGoals.length > 0 && (
-        <section className="tile space-y-4">
-          {/* header */}
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <PiggyBank className="size-4 text-emerald-600" />
-              חיסכון ויעדים
-            </h2>
-            <Link href="/savings" className="text-xs text-primary hover:underline">
-              לכל היעדים ←
-            </Link>
-          </div>
-
-          {/* per-goal progress bars */}
-          <div className="space-y-3.5">
-            {activeGoals.map((g) => {
-              const current = Number(g.currentAmountIls);
-              const target = g.targetAmountIls !== null ? Number(g.targetAmountIls) : null;
-              const pct = target && target > 0 ? Math.min(100, Math.round((current / target) * 100)) : null;
-              const barColor = g.color ?? '#10b981';
-              return (
-                <div key={g.id} className="space-y-1.5">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div className="flex items-center gap-1.5 text-sm font-medium">
-                      <GoalIcon
-                        name={g.icon}
-                        className="size-3.5 shrink-0"
-                        style={g.color ? { color: g.color } : undefined}
-                      />
-                      <span>{g.name}</span>
-                    </div>
-                    <div className="text-sm tabular-nums">
-                      <span className="font-semibold">
-                        {formatIls(current, { decimals: false })}
-                      </span>
-                      {target !== null && (
-                        <span className="text-muted-foreground">
-                          {' / '}{formatIls(target, { decimals: false })}
-                        </span>
-                      )}
-                      {pct !== null && (
-                        <span className="ms-1.5 text-xs text-muted-foreground">({pct}%)</span>
-                      )}
-                    </div>
-                  </div>
-                  {target !== null && (
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{ width: `${pct ?? 0}%`, backgroundColor: barColor }}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* total summary footer */}
-          {savingsTotalTarget > 0 && (
-            <div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
-              <span>סה״כ</span>
-              <span className="tabular-nums font-medium text-foreground">
-                {formatIls(savingsTotalCurrent, { decimals: false })}
-                {' / '}
-                {formatIls(savingsTotalTarget, { decimals: false })}
-              </span>
-            </div>
-          )}
-        </section>
-      )}
-        </div>
-      )}
+      {/* The Recurring + Savings paired row was moved BELOW the
+          donut/categories grid — see further down in the data-exists
+          branch — so the visual reading order is: insights → category
+          spend (donut + bars) → recurring vs savings → recent
+          transactions. */}
 
       {!hasData ? (
         <EmptyState
@@ -887,6 +712,186 @@ export default async function DashboardPage(props: {
               </div>
             </section>
           </div>
+
+          {/* ── Side-by-side row: Recurring overview + Savings snapshot ──
+              Sits right under the donut/categories grid so the user reads
+              top-to-bottom: per-category spend → fixed monthly commitments
+              & savings → recent transactions. Both children self-hide
+              when their data is empty; the wrapper renders if either
+              has data. ── */}
+          {(activeRecurringPatterns.length > 0 || activeGoals.length > 0) && (
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              {activeRecurringPatterns.length > 0 && (
+                <section className="tile space-y-4" dir="rtl">
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                      <Repeat className="size-4" />
+                      הוצאות קבועות (תמונת מצב חודשית)
+                    </h2>
+                    <Link
+                      href="/recurring"
+                      className="text-xs text-primary hover:underline"
+                      title="ניהול הוצאות קבועות"
+                    >
+                      ניהול ←
+                    </Link>
+                  </div>
+
+                  {/* Three numbers */}
+                  <div className="grid grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">הוצאות חודשיות</p>
+                      <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                        {formatIls(recurringMonthlyExpense, { decimals: false })}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">הכנסות חודשיות</p>
+                      <p className="mt-0.5 text-lg font-semibold tabular-nums text-success">
+                        {formatIls(recurringMonthlyIncome, { decimals: false })}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">תזרים נטו צפוי</p>
+                      <p className={cn(
+                        'mt-0.5 text-lg font-semibold tabular-nums',
+                        recurringMonthlyIncome - recurringMonthlyExpense >= 0 ? 'text-success' : 'text-destructive',
+                      )}>
+                        {formatIls(recurringMonthlyIncome - recurringMonthlyExpense, { decimals: false })}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Visual ratio bar — what % of monthly income is "locked" by
+                      recurring expenses. Tone shifts as the share grows. */}
+                  {recurringMonthlyIncome > 0 && (() => {
+                    const pct = Math.min(100, Math.round((recurringMonthlyExpense / recurringMonthlyIncome) * 100));
+                    const tone =
+                      pct >= 70 ? 'bg-destructive'
+                      : pct >= 50 ? 'bg-warning'
+                      : 'bg-primary';
+                    return (
+                      <div className="space-y-1">
+                        <div className="flex items-baseline justify-between text-xs">
+                          <span className="text-muted-foreground">חלק קבוע מההכנסות</span>
+                          <span className="font-semibold tabular-nums">{pct}%</span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                          <div className={cn('h-full transition-all', tone)} style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Top 5 biggest recurring expenses */}
+                  {topRecurringExpenses.length > 0 && (
+                    <div>
+                      <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                        ההוצאות הגדולות ביותר
+                      </p>
+                      <ul className="divide-y rounded-md border">
+                        {topRecurringExpenses.map((p) => {
+                          const cat = p.categoryId ? catMap.get(p.categoryId) : null;
+                          return (
+                            <li key={p.merchantNormalized} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="truncate font-medium">{p.merchantNormalized}</span>
+                                {cat && (
+                                  <span
+                                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                    style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
+                                  >
+                                    {cat.nameHe}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="shrink-0 font-semibold tabular-nums">
+                                {formatIls(Math.abs(p.monthly), { decimals: false })}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* Savings snapshot — paired side-by-side with Recurring above. */}
+              {activeGoals.length > 0 && (
+                <section className="tile space-y-4">
+                  {/* header */}
+                  <div className="flex items-center justify-between">
+                    <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                      <PiggyBank className="size-4 text-emerald-600" />
+                      חיסכון ויעדים
+                    </h2>
+                    <Link href="/savings" className="text-xs text-primary hover:underline">
+                      לכל היעדים ←
+                    </Link>
+                  </div>
+
+                  {/* per-goal progress bars */}
+                  <div className="space-y-3.5">
+                    {activeGoals.map((g) => {
+                      const current = Number(g.currentAmountIls);
+                      const target = g.targetAmountIls !== null ? Number(g.targetAmountIls) : null;
+                      const pct = target && target > 0 ? Math.min(100, Math.round((current / target) * 100)) : null;
+                      const barColor = g.color ?? '#10b981';
+                      return (
+                        <div key={g.id} className="space-y-1.5">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <div className="flex items-center gap-1.5 text-sm font-medium">
+                              <GoalIcon
+                                name={g.icon}
+                                className="size-3.5 shrink-0"
+                                style={g.color ? { color: g.color } : undefined}
+                              />
+                              <span>{g.name}</span>
+                            </div>
+                            <div className="text-sm tabular-nums">
+                              <span className="font-semibold">
+                                {formatIls(current, { decimals: false })}
+                              </span>
+                              {target !== null && (
+                                <span className="text-muted-foreground">
+                                  {' / '}{formatIls(target, { decimals: false })}
+                                </span>
+                              )}
+                              {pct !== null && (
+                                <span className="ms-1.5 text-xs text-muted-foreground">({pct}%)</span>
+                              )}
+                            </div>
+                          </div>
+                          {target !== null && (
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                              <div
+                                className="h-full rounded-full transition-all duration-700"
+                                style={{ width: `${pct ?? 0}%`, backgroundColor: barColor }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* total summary footer */}
+                  {savingsTotalTarget > 0 && (
+                    <div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
+                      <span>סה״כ</span>
+                      <span className="tabular-nums font-medium text-foreground">
+                        {formatIls(savingsTotalCurrent, { decimals: false })}
+                        {' / '}
+                        {formatIls(savingsTotalTarget, { decimals: false })}
+                      </span>
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
+          )}
 
           {/* ── Transactions strip ── */}
           <DashboardTransactionsSection
