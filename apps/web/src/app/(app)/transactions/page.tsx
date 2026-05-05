@@ -6,8 +6,9 @@ import { formatIls, formatMonthHe, formatShortDateHe, he } from '@fba/shared';
 import { createTransaction } from './actions';
 import { redirect } from 'next/navigation';
 import { TransactionsList } from './transactions-list';
+import { MonthSwitcher } from './month-switcher';
 import { autoComputeChargeDate } from '@/lib/charge-date';
-import { ChevronLeft, ChevronRight, Clock, CheckCircle2, CalendarClock, User as UserIcon, Briefcase, Users } from 'lucide-react';
+import { Clock, CheckCircle2, CalendarClock, User as UserIcon, Briefcase, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type View = 'personal' | 'business' | 'combined';
@@ -230,7 +231,14 @@ export default async function TransactionsPage(props: {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <ViewTabs current={view} month={month} />
-          <CycleSwitcher month={month} view={view} prev={prevMonth} next={nextMonth} label={cycleLabel} />
+          <MonthSwitcher
+            month={month}
+            view={view}
+            prev={prevMonth}
+            next={nextMonth}
+            label={cycleLabel}
+            activeMonth={activeBillingMonth(10)}
+          />
         </div>
       </header>
 
@@ -361,28 +369,6 @@ export default async function TransactionsPage(props: {
         nextCycleChargeDate={nextCycleChargeDate}
         nextMonth={nextMonth}
       />
-    </div>
-  );
-}
-
-// ── CycleSwitcher ─────────────────────────────────────────────────────────────
-
-function CycleSwitcher({ month, view, prev, next, label }: { month: string; view: View; prev: string; next: string; label: string }) {
-  // Preserve the active view tab when switching months — otherwise navigating
-  // months would silently reset the user back to the default 'personal' view.
-  const buildHref = (m: string) => `/transactions?month=${m}&view=${view}`;
-  return (
-    <div className="flex items-center gap-1 rounded-lg border bg-card p-1 text-sm shadow-sm">
-      <a href={buildHref(prev)} className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground" title={`חודש קודם: ${formatMonthHe(prev)}`}>
-        <ChevronRight className="size-4" />
-      </a>
-      <div className="flex min-w-[9rem] flex-col items-center px-2">
-        <span className="text-xs font-medium text-primary">{label}</span>
-        <span className="font-semibold">{formatMonthHe(month)}</span>
-      </div>
-      <a href={buildHref(next)} className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground" title={`חודש הבא: ${formatMonthHe(next)}`}>
-        <ChevronLeft className="size-4" />
-      </a>
     </div>
   );
 }

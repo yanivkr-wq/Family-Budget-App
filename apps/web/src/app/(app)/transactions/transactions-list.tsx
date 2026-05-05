@@ -218,7 +218,7 @@ export function TransactionsList(props: {
                     <button
                       type="button"
                       onClick={() => setColumnsOpen(true)}
-                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+                      className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1 text-xs font-medium text-foreground/80 shadow-sm hover:border-accent/50 hover:bg-accent/10 hover:text-foreground"
                       title="הסתר/הצג עמודות וסדר אותן מחדש"
                     >
                       <Settings2 className="size-3.5" />
