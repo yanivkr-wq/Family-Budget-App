@@ -12,6 +12,7 @@ import { CategoryDonutLazy as CategoryDonut } from '@/components/ui/category-don
 import { DashboardTransactionsSection } from './dashboard-transactions-section';
 import type { DashboardTx } from './dashboard-transactions-section';
 import { InsightDetailsToggle } from './dashboard-insight-details';
+import { InsightsCatalogToggle } from './dashboard-insights-catalog';
 import { GoalIcon } from '@/components/ui/goal-icon';
 import {
   Wallet,
@@ -31,6 +32,7 @@ import {
   AlertOctagon,
   AlertTriangle,
   PartyPopper,
+  Eye,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -386,24 +388,6 @@ export default async function DashboardPage(props: {
     daysLeft,
     month,
     spent,
-  });
-  // DEBUG — temporary log to diagnose missing insights on dashboard. Remove later.
-  console.log('[insights-debug]', {
-    month,
-    isCurrentMonth,
-    view,
-    day,
-    daysInMonth,
-    daysLeft,
-    spent,
-    totalIncome,
-    projectedEom,
-    hasEnoughDataForProjection,
-    transactionCount: totals.length,
-    insightCount: insights.length,
-    insights: insights.map((i) => ({ id: i.id, severity: i.severity })),
-    budgetRows: budgetRows.length,
-    activeInstallmentPlans: activeInstallmentPlans.length,
   });
 
   const donutData = budgetRows
@@ -1050,7 +1034,9 @@ const SEVERITY_CFG: Record<InsightSeverity, {
 };
 
 function InsightsWidget({ insights, month }: { insights: Insight[]; month: string }) {
-  if (insights.length === 0) return null;
+  // We always render the widget — even with zero active insights — so the
+  // user can open the "what does this widget watch?" catalog and understand
+  // what alerts to expect.
 
   const criticalCount = insights.filter((i) => i.severity === 'critical').length;
   const warningCount  = insights.filter((i) => i.severity === 'warning').length;
@@ -1060,7 +1046,7 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
   return (
     <section className="rounded-xl border bg-card overflow-hidden" dir="rtl">
       {/* header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/20">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <Sparkles className="size-4 text-primary" />
           תובנות חכמות
@@ -1076,8 +1062,21 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
               {warningCount} אזהרה
             </span>
           )}
+          {/* Eye icon — opens the "what insights does this widget watch?"
+              catalog. Most useful when no insights are firing. */}
+          <InsightsCatalogToggle />
         </div>
       </div>
+
+      {/* empty state */}
+      {insights.length === 0 && (
+        <div className="px-4 py-6 text-center">
+          <p className="text-sm text-muted-foreground">אין תובנות פעילות כרגע</p>
+          <p className="mt-1 text-xs text-muted-foreground/70">
+            לחץ על האייקון <Eye className="inline size-3" /> למעלה כדי לראות אילו תובנות המערכת בודקת
+          </p>
+        </div>
+      )}
 
       {/* insight rows */}
       <ul className="divide-y">
