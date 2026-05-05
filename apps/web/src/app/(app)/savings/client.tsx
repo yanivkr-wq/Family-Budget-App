@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useTransition, type CSSProperties } from 'react';
+import { useState, useTransition } from 'react';
 import { formatIls } from '@fba/shared';
 import {
-  PiggyBank,
   Pencil,
   Trash2,
   Plus,
@@ -15,16 +14,11 @@ import {
   CircleDollarSign,
   ChevronDown,
   ChevronUp,
-  HeartPulse,
-  Car,
-  Home,
-  Plane,
-  BookOpen,
-  Wallet,
-  type LucideIcon,
+  PiggyBank,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createGoal, updateGoal, deleteGoal, updateGoalBalance } from './actions';
+import { GoalIcon, GOAL_ICON_MAP, type GoalIconName } from '@/components/ui/goal-icon';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -50,23 +44,11 @@ export interface MonthlySavingsData {
 }
 
 // ─── icon/color presets ───────────────────────────────────────────────────────
+// The component + name→component map live in @/components/ui/goal-icon so the
+// dashboard savings snapshot can reuse them. Below we just declare the user-
+// facing label for each icon, in pick-order.
 
-// Lucide name → component map. We store the NAME (string) in the DB `icon`
-// column so SSR/JSON-serialization stays simple, then look up the component
-// here for rendering. Add new entries to both ICON_MAP and ICON_PRESETS.
-const ICON_MAP: Record<string, LucideIcon> = {
-  HeartPulse,
-  Car,
-  Home,
-  Plane,
-  BookOpen,
-  Wallet,
-  Target,
-  TrendingUp,
-  PiggyBank, // fallback / "general"
-};
-
-const ICON_PRESETS: Array<{ name: keyof typeof ICON_MAP; label: string }> = [
+const ICON_PRESETS: Array<{ name: GoalIconName; label: string }> = [
   { name: 'HeartPulse', label: 'קרן חירום' },
   { name: 'Car',        label: 'רכב' },
   { name: 'Home',       label: 'דיור' },
@@ -77,19 +59,8 @@ const ICON_PRESETS: Array<{ name: keyof typeof ICON_MAP; label: string }> = [
   { name: 'TrendingUp', label: 'השקעות' },
 ];
 
-/** Render a goal icon by stored name; fall back to PiggyBank if unknown/null. */
-function GoalIcon({
-  name,
-  className,
-  style,
-}: {
-  name: string | null;
-  className?: string;
-  style?: CSSProperties;
-}) {
-  const Icon: LucideIcon = (name ? ICON_MAP[name] : undefined) ?? PiggyBank;
-  return <Icon className={className} style={style} />;
-}
+// Re-export so devtools / future callers in this file see what's available.
+void GOAL_ICON_MAP;
 
 const COLOR_PRESETS = [
   '#10b981', // emerald

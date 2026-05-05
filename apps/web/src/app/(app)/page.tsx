@@ -12,6 +12,7 @@ import { CategoryDonutLazy as CategoryDonut } from '@/components/ui/category-don
 import { DashboardTransactionsSection } from './dashboard-transactions-section';
 import type { DashboardTx } from './dashboard-transactions-section';
 import { InsightDetailsToggle } from './dashboard-insight-details';
+import { GoalIcon } from '@/components/ui/goal-icon';
 import {
   Wallet,
   TrendingDown,
@@ -386,6 +387,24 @@ export default async function DashboardPage(props: {
     month,
     spent,
   });
+  // DEBUG — temporary log to diagnose missing insights on dashboard. Remove later.
+  console.log('[insights-debug]', {
+    month,
+    isCurrentMonth,
+    view,
+    day,
+    daysInMonth,
+    daysLeft,
+    spent,
+    totalIncome,
+    projectedEom,
+    hasEnoughDataForProjection,
+    transactionCount: totals.length,
+    insightCount: insights.length,
+    insights: insights.map((i) => ({ id: i.id, severity: i.severity })),
+    budgetRows: budgetRows.length,
+    activeInstallmentPlans: activeInstallmentPlans.length,
+  });
 
   const donutData = budgetRows
     .filter((r) => r.actual > 0)
@@ -560,7 +579,11 @@ export default async function DashboardPage(props: {
                 <div key={g.id} className="space-y-1.5">
                   <div className="flex items-baseline justify-between gap-3">
                     <div className="flex items-center gap-1.5 text-sm font-medium">
-                      {g.icon && <span className="text-base leading-none">{g.icon}</span>}
+                      <GoalIcon
+                        name={g.icon}
+                        className="size-3.5 shrink-0"
+                        style={g.color ? { color: g.color } : undefined}
+                      />
                       <span>{g.name}</span>
                     </div>
                     <div className="text-sm tabular-nums">
