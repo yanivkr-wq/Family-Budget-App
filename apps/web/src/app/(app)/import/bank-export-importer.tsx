@@ -14,7 +14,7 @@
  */
 
 import { useState, useTransition } from 'react';
-import { Loader2, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, CreditCard, Globe2, Repeat } from 'lucide-react';
+import { Loader2, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, CreditCard, Globe2, Repeat, Sparkles, Tag } from 'lucide-react';
 import { importBankExport, type BankExportImportResult } from './actions';
 
 interface AccountOption {
@@ -149,19 +149,44 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
         </div>
       </div>
 
-      {/* Counts */}
+      {/* Counts — primary row */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Stat icon={<FileSpreadsheet className="size-3.5" />} label="נוספו" value={result.inserted} />
+        {result.upgradedDuplicates > 0 && (
+          <Stat icon={<Sparkles className="size-3.5 text-primary" />} label="שודרגו (תיוג + שיוך)" value={result.upgradedDuplicates} />
+        )}
         {result.duplicates > 0 && (
-          <Stat icon={<Repeat className="size-3.5" />} label="כפילויות דולגו" value={result.duplicates} />
+          <Stat icon={<Repeat className="size-3.5" />} label="כפילויות (ללא שינוי)" value={result.duplicates} />
         )}
-        {result.installmentRows > 0 && (
-          <Stat icon={<CreditCard className="size-3.5 text-primary" />} label="שורות תשלומים" value={result.installmentRows} />
-        )}
-        {result.forexRows > 0 && (
-          <Stat icon={<Globe2 className="size-3.5 text-accent" />} label='חו"ל' value={result.forexRows} />
+        {result.errors.length > 0 && (
+          <Stat icon={<AlertTriangle className="size-3.5 text-warning" />} label="שגיאות" value={result.errors.length} />
         )}
       </div>
+
+      {/* Counts — automation row */}
+      {(result.categorizedRows > 0 || result.newPlansCreated > 0 || result.rowsLinkedToPlans > 0 || result.forexRows > 0) && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {result.categorizedRows > 0 && (
+            <Stat icon={<Tag className="size-3.5 text-primary" />} label="קטגוריה הוחלה" value={result.categorizedRows} />
+          )}
+          {result.newPlansCreated > 0 && (
+            <Stat icon={<CreditCard className="size-3.5 text-accent" />} label="תוכניות תשלומים נוצרו" value={result.newPlansCreated} />
+          )}
+          {result.rowsLinkedToPlans > 0 && (
+            <Stat icon={<CreditCard className="size-3.5 text-primary" />} label="שורות שויכו לתשלומים" value={result.rowsLinkedToPlans} />
+          )}
+          {result.forexRows > 0 && (
+            <Stat icon={<Globe2 className="size-3.5 text-accent" />} label='חו"ל' value={result.forexRows} />
+          )}
+        </div>
+      )}
+
+      {result.newPlansCreated > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          תוכניות תשלומים חדשות ממתינות לשם תיאורי (כגון &ldquo;iPhone&rdquo;) — ערוך אותן ב-
+          <a href="/installments" className="underline">תשלומים</a>.
+        </p>
+      )}
 
       {/* Multi-card warning */}
       {result.distinctCards.length > 1 && (

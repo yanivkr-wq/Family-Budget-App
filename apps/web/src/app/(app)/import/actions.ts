@@ -1089,10 +1089,21 @@ export interface BankExportImportResult {
   templateUsed:      { id: string; name: string } | null;
   inserted:          number;
   duplicates:        number;
+  /** When re-importing the same file, rows already exist BUT have NULL
+   *  category_id / installment_plan_id. The new ON CONFLICT DO UPDATE path
+   *  fills those gaps without duplicating. This counts how many such rows
+   *  got upgraded (categorized OR plan-linked). */
+  upgradedDuplicates: number;
   pendingSkipped:    number;          // rows where parser silently skipped (Format A pending)
   forexRows:         number;          // count of rows flagged as forex
   installmentRows:   number;          // count of rows whose notes carry "תשלום N מתוך Y"
   rowsParsed:        number;          // total rows the parser produced
+  /** Rows that received a category from the rules engine. */
+  categorizedRows:   number;
+  /** Installment plans auto-created during this import (didn't exist before). */
+  newPlansCreated:   number;
+  /** Rows linked to an installment plan (newly created OR pre-existing). */
+  rowsLinkedToPlans: number;
   errors:            Array<{ row: number; reason: string }>;
   /** Distinct card-last-4 values found in the file (Format B). When >1, the
    *  UI shows a "this file has multiple cards — all routed to <account>"
@@ -1104,7 +1115,10 @@ export interface BankExportImportResult {
 
 import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
+import { sql } from 'drizzle-orm';
 import { smartImport } from '@/lib/smart-importer';
+import { applyRules } from '@fba/categorizer';
+import { addMonths } from '@fba/db';
 
 function hashRowId(date: string, chargeDate: string | null, amount: number, merchant: string, notes: string | null): string {
   const key = [date, chargeDate ?? '', amount.toFixed(2), merchant.trim(), (notes ?? '').trim()].join('|');
@@ -1140,20 +1154,15 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   const file = formData.get('file');
   const accountId = String(formData.get('accountId') ?? '').trim();
 
-  if (!(file instanceof File) || file.size === 0) {
-    return {
-      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
-      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
-      needsManualMapping: false, message: 'לא נבחר קובץ',
-    };
-  }
-  if (!accountId) {
-    return {
-      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
-      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
-      needsManualMapping: false, message: 'יש לבחור חשבון',
-    };
-  }
+  const empty = (msg: string, extra: Partial<BankExportImportResult> = {}): BankExportImportResult => ({
+    ok: false, templateUsed: null, inserted: 0, duplicates: 0, upgradedDuplicates: 0,
+    pendingSkipped: 0, forexRows: 0, installmentRows: 0, rowsParsed: 0,
+    categorizedRows: 0, newPlansCreated: 0, rowsLinkedToPlans: 0,
+    errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
+  });
+
+  if (!(file instanceof File) || file.size === 0) return empty('לא נבחר קובץ');
+  if (!accountId) return empty('יש לבחור חשבון');
 
   const ctx = await requireSession();
   const db = getDb();
@@ -1172,13 +1181,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       eq(schema.accounts.householdId, ctx.householdId),
     ))
     .limit(1);
-  if (!account) {
-    return {
-      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
-      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
-      needsManualMapping: false, message: 'החשבון שנבחר לא נמצא',
-    };
-  }
+  if (!account) return empty('החשבון שנבחר לא נמצא');
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const isExcel = /\.(xlsx|xls)$/i.test(file.name);
@@ -1186,57 +1189,170 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   const parsed = await smartImport(buffer, isExcel);
 
   if (parsed.needsManualMapping) {
-    return {
-      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
-      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
+    return empty('לא זוהה תבנית מתאימה לקובץ. ניתן להשתמש בייבוא הגנרי או להוסיף תבנית.', {
       needsManualMapping: true,
-      message: 'לא זוהה תבנית מתאימה לקובץ. ניתן להשתמש בייבוא הגנרי או להוסיף תבנית.',
-    };
+    });
   }
 
   if (!parsed.success || parsed.transactions.length === 0) {
-    return {
-      ok: false,
+    return empty('הקובץ לא הניב שורות תקינות', {
       templateUsed: parsed.templateUsed && { id: parsed.templateUsed.id, name: parsed.templateUsed.name },
-      inserted: 0, duplicates: 0, pendingSkipped: 0,
-      forexRows: 0, installmentRows: 0, rowsParsed: 0,
-      errors: parsed.errors, distinctCards: [], needsManualMapping: false,
-      message: 'הקובץ לא הניב שורות תקינות',
-    };
+      errors: parsed.errors,
+    });
   }
 
   const distinctCards = extractDistinctCards(buffer);
 
-  // Build inserts. installment_info column on the source maps to is_installment
-  // boolean here; the auto-link to a specific installment_plan happens in a
-  // separate step (future commit).
-  const inserts = parsed.transactions.map((t) => {
+  // ── Load household-level data needed by both the categorizer and the
+  // installment auto-detector. Both run BEFORE any insert so we set the
+  // right fields on the rows the first time. ─────────────────────────────────
+  const [allRules, existingPlans] = await Promise.all([
+    db.select().from(schema.categoryRules).where(and(
+      eq(schema.categoryRules.householdId, ctx.householdId),
+      eq(schema.categoryRules.isActive, true),
+    )),
+    db.select({
+      id:                 schema.installmentPlans.id,
+      accountId:          schema.installmentPlans.accountId,
+      merchantNormalized: schema.installmentPlans.merchantNormalized,
+      paymentAmountIls:   schema.installmentPlans.paymentAmountIls,
+      totalPayments:      schema.installmentPlans.totalPayments,
+      currentPaymentNo:   schema.installmentPlans.currentPaymentNo,
+    }).from(schema.installmentPlans).where(and(
+      eq(schema.installmentPlans.householdId, ctx.householdId),
+      eq(schema.installmentPlans.status, 'active'),
+    )),
+  ]);
+
+  // Plan fingerprint = (merchantNormalized, paymentAmount-cents, totalPayments,
+  // accountId). Cents-precision avoids float comparison issues. accountId is
+  // included because two different cards could theoretically have parallel
+  // plans for the same merchant + amount.
+  const fp = (merchantNorm: string, amount: number, totalPayments: number) =>
+    `${merchantNorm}|${Math.round(Math.abs(amount) * 100)}|${totalPayments}|${accountId}`;
+  const planMap = new Map<string, string>();
+  for (const p of existingPlans) {
+    if (!p.totalPayments) continue;
+    if (p.accountId !== accountId) continue;
+    planMap.set(fp(p.merchantNormalized, Number(p.paymentAmountIls), p.totalPayments), p.id);
+  }
+
+  const installmentRegex = /תשלום\s*(\d+)\s*מתוך\s*(\d+)/;
+
+  // ── Pass 1: parse installment markers per row + identify plans we need
+  // to create (those not in planMap yet). ───────────────────────────────────
+  type RowMeta = {
+    tx: typeof parsed.transactions[number];
+    merchantNorm: string;
+    billingMonth: string;
+    installment: { N: number; Y: number; fingerprint: string } | null;
+  };
+  const rowMetas: RowMeta[] = parsed.transactions.map((t) => {
+    const merchantNorm = normalizeMerchant(t.merchantRaw);
     const billingMonth = t.chargeDate
       ? t.chargeDate.slice(0, 7)
       : computeBillingMonth(t.transactionDate, account.cutoffDay);
 
-    const hasInstallmentNote = /תשלום\s*\d+\s*מתוך\s*\d+/.test(t.notes ?? '');
+    const m = (t.notes ?? '').match(installmentRegex);
+    if (!m) return { tx: t, merchantNorm, billingMonth, installment: null };
+
+    const N = Number(m[1]);
+    const Y = Number(m[2]);
+    if (!Number.isFinite(N) || !Number.isFinite(Y) || Y < 1 || N < 1) {
+      return { tx: t, merchantNorm, billingMonth, installment: null };
+    }
+    return {
+      tx: t, merchantNorm, billingMonth,
+      installment: { N, Y, fingerprint: fp(merchantNorm, t.amountIls, Y) },
+    };
+  });
+
+  // ── Pass 2: create any missing plans. We dedupe within this batch so two
+  // rows from the same plan (e.g. תשלום 1/12 and תשלום 2/12 in the same
+  // file) only create the plan once. ────────────────────────────────────────
+  let newPlansCreated = 0;
+  const uniqueNewPlans = new Map<string, RowMeta>();
+  for (const meta of rowMetas) {
+    if (!meta.installment) continue;
+    if (planMap.has(meta.installment.fingerprint)) continue;
+    if (uniqueNewPlans.has(meta.installment.fingerprint)) continue;
+    uniqueNewPlans.set(meta.installment.fingerprint, meta);
+  }
+  for (const meta of uniqueNewPlans.values()) {
+    const inst = meta.installment!;
+    // startMonth = billingMonth - (N-1) months → first payment of the plan
+    // projectedEndMonth = startMonth + (Y-1) months → last payment
+    const startMonth = addMonths(meta.billingMonth, -(inst.N - 1));
+    const projectedEndMonth = addMonths(startMonth, inst.Y - 1);
+    const [created] = await db.insert(schema.installmentPlans).values({
+      householdId:        ctx.householdId,
+      accountId,
+      merchantNormalized: meta.merchantNorm,
+      // Description is intentionally NULL — the user names the plan from the
+      // /installments page (e.g. "iPhone 15 Pro" instead of "KSP").
+      paymentAmountIls:   String(Math.abs(meta.tx.amountIls)),
+      totalPayments:      inst.Y,
+      currentPaymentNo:   inst.N,
+      startMonth,
+      projectedEndMonth,
+      status:             'active',
+    }).returning({ id: schema.installmentPlans.id });
+    if (created) {
+      planMap.set(inst.fingerprint, created.id);
+      newPlansCreated++;
+    }
+  }
+
+  // ── Pass 3: build the final transaction inserts. Apply categorization
+  // rules + attach installment_plan_id when applicable. ────────────────────
+  let categorizedRows = 0;
+  let rowsLinkedToPlans = 0;
+  const inserts = rowMetas.map(({ tx, merchantNorm, billingMonth, installment }) => {
+    const ruleResult = applyRules(allRules, {
+      merchantNormalized: merchantNorm,
+      merchantRaw:        tx.merchantRaw,
+      accountId,
+      amountAbs:          Math.abs(tx.amountIls),
+      notes:              tx.notes,
+    });
+    if (ruleResult) categorizedRows++;
+
+    const planId = installment ? planMap.get(installment.fingerprint) ?? null : null;
+    if (planId) rowsLinkedToPlans++;
 
     return {
       householdId: ctx.householdId,
       accountId,
-      transactionDate: t.transactionDate,
-      chargeDate: t.chargeDate,
+      transactionDate: tx.transactionDate,
+      chargeDate: tx.chargeDate,
       billingMonth,
-      amountIls: String(t.amountIls),
+      amountIls: String(tx.amountIls),
       currency: 'ILS',
-      ...(t.originalAmount !== null ? { originalAmount: String(t.originalAmount) } : {}),
-      ...(t.originalCurrency !== null ? { originalCurrency: t.originalCurrency } : {}),
-      merchantRaw: t.merchantRaw,
-      merchantNormalized: normalizeMerchant(t.merchantRaw),
-      notes: t.notes,
+      ...(tx.originalAmount !== null ? { originalAmount: String(tx.originalAmount) } : {}),
+      ...(tx.originalCurrency !== null ? { originalCurrency: tx.originalCurrency } : {}),
+      merchantRaw: tx.merchantRaw,
+      merchantNormalized: merchantNorm,
+      notes: tx.notes,
       isManual: false,
-      isInstallment: hasInstallmentNote,
-      externalId: hashRowId(t.transactionDate, t.chargeDate, t.amountIls, t.merchantRaw, t.notes),
+      isInstallment: !!installment,
+      ...(planId ? { installmentPlanId: planId } : {}),
+      ...(ruleResult ? {
+        categoryId:    ruleResult.categoryId,
+        subCategoryId: ruleResult.subCategoryId,
+        appliedRuleId: ruleResult.rule.id,
+        categorySource: 'rule' as const,
+      } : {}),
+      externalId: hashRowId(tx.transactionDate, tx.chargeDate, tx.amountIls, tx.merchantRaw, tx.notes),
     };
   });
 
+  // ── Insert with ON CONFLICT DO UPDATE. Only fills NULL fields (via
+  // COALESCE) so re-importing the same file UPGRADES previously-imported
+  // rows that lacked categorization or plan-linking, without overwriting
+  // anything the user may have manually set. ───────────────────────────────
   let inserted = 0;
+  let upgradedDuplicates = 0;
+
   if (inserts.length > 0) {
     const BATCH = 500;
     for (let i = 0; i < inserts.length; i += BATCH) {
@@ -1244,13 +1360,41 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       const result = await db
         .insert(schema.transactions)
         .values(batch)
-        .onConflictDoNothing()
-        .returning({ id: schema.transactions.id });
-      inserted += result.length;
+        .onConflictDoUpdate({
+          target: [schema.transactions.accountId, schema.transactions.externalId],
+          set: {
+            // Fill NULLs only — leave user-set values alone.
+            categoryId:        sql`coalesce(${schema.transactions.categoryId}, excluded.category_id)`,
+            subCategoryId:     sql`coalesce(${schema.transactions.subCategoryId}, excluded.sub_category_id)`,
+            appliedRuleId:     sql`coalesce(${schema.transactions.appliedRuleId}, excluded.applied_rule_id)`,
+            categorySource:    sql`coalesce(${schema.transactions.categorySource}, excluded.category_source)`,
+            installmentPlanId: sql`coalesce(${schema.transactions.installmentPlanId}, excluded.installment_plan_id)`,
+            isInstallment:     sql`${schema.transactions.isInstallment} or excluded.is_installment`,
+          },
+          // Only run the UPDATE if any of those fields are still NULL on the
+          // existing row AND the new row has something to fill in. Avoids
+          // pointless UPDATE traffic on truly-already-fully-categorized rows.
+          where: sql`(
+            ${schema.transactions.categoryId} is null and excluded.category_id is not null
+          ) or (
+            ${schema.transactions.installmentPlanId} is null and excluded.installment_plan_id is not null
+          ) or (
+            ${schema.transactions.isInstallment} = false and excluded.is_installment = true
+          )`,
+        })
+        .returning({
+          id: schema.transactions.id,
+          // xmax = 0 means "this was a fresh INSERT", non-zero means "this row
+          // was UPDATEed by the conflict path".
+          inserted: sql<boolean>`(xmax = 0)`,
+        });
+      for (const r of result) {
+        if (r.inserted) inserted++;
+        else upgradedDuplicates++;
+      }
     }
-    const duplicates = inserts.length - inserted;
+    const duplicates = inserts.length - inserted - upgradedDuplicates;
 
-    // Audit trail
     await db.insert(schema.auditLog).values({
       householdId: ctx.householdId,
       actorUserId: ctx.userId,
@@ -1263,6 +1407,10 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         accountId,
         inserted,
         duplicates,
+        upgradedDuplicates,
+        categorizedRows,
+        newPlansCreated,
+        rowsLinkedToPlans,
         forexRows: parsed.transactions.filter((t) => t.isForex).length,
         installmentRows: inserts.filter((i) => i.isInstallment).length,
         distinctCards,
@@ -1271,6 +1419,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
 
     revalidatePath('/');
     revalidatePath('/transactions');
+    revalidatePath('/installments');
     revalidatePath('/import');
 
     return {
@@ -1278,22 +1427,22 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       templateUsed: { id: parsed.templateUsed!.id, name: parsed.templateUsed!.name },
       inserted,
       duplicates,
+      upgradedDuplicates,
       pendingSkipped: 0,
       forexRows: parsed.transactions.filter((t) => t.isForex).length,
       installmentRows: inserts.filter((i) => i.isInstallment).length,
       rowsParsed: parsed.transactions.length,
+      categorizedRows,
+      newPlansCreated,
+      rowsLinkedToPlans,
       errors: parsed.errors,
       distinctCards,
       needsManualMapping: false,
     };
   }
 
-  return {
-    ok: false,
+  return empty('הקובץ לא הניב שורות תקינות', {
     templateUsed: { id: parsed.templateUsed!.id, name: parsed.templateUsed!.name },
-    inserted: 0, duplicates: 0, pendingSkipped: 0,
-    forexRows: 0, installmentRows: 0, rowsParsed: 0,
-    errors: parsed.errors, distinctCards: [], needsManualMapping: false,
-    message: 'הקובץ לא הניב שורות תקינות',
-  };
+    errors: parsed.errors,
+  });
 }
