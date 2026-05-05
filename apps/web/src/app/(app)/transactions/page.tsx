@@ -1,12 +1,24 @@
+import Link from 'next/link';
 import { auth } from '@/lib/auth';
 import { getDb, schema, activeBillingMonth, billingCycleRange } from '@fba/db';
-import { and, desc, eq, gte, isNull, lt, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
 import { formatIls, formatMonthHe, formatShortDateHe, he } from '@fba/shared';
 import { createTransaction } from './actions';
 import { redirect } from 'next/navigation';
 import { TransactionsList } from './transactions-list';
 import { autoComputeChargeDate } from '@/lib/charge-date';
-import { ChevronLeft, ChevronRight, Clock, CheckCircle2, CalendarClock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, CheckCircle2, CalendarClock, User as UserIcon, Briefcase, Users } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+type View = 'personal' | 'business' | 'combined';
+
+// Same shape as the dashboard's view tabs — see /apps/web/src/app/(app)/page.tsx.
+// Future improvement: extract to a shared component once a third page needs it.
+const VIEW_OPTIONS: Array<{ value: View; label: string; icon: typeof UserIcon; helpText: string }> = [
+  { value: 'personal', label: 'אישי',   icon: UserIcon,  helpText: 'חשבונות פרטיים בלבד' },
+  { value: 'business', label: 'עסקי',   icon: Briefcase, helpText: 'חשבונות עסקיים בלבד' },
+  { value: 'combined', label: 'משולב',  icon: Users,     helpText: 'הכל ביחד' },
+];
 
 export const dynamic = 'force-dynamic';
 
@@ -21,19 +33,21 @@ function addMonth(yearMonth: string, delta: number): string {
 }
 
 export default async function TransactionsPage(props: {
-  searchParams: Promise<{ month?: string; error?: string; ok?: string }>;
+  searchParams: Promise<{ month?: string; view?: string; error?: string; ok?: string }>;
 }) {
   const session = await auth();
   const householdId = session!.user.householdId;
   const sp = await props.searchParams;
   // `month` here is a calendar month, e.g. "2026-05"
   const month = sp.month ?? activeBillingMonth(10);
+  // View tab: filters to accounts of a given purpose. 'shared' accounts always show.
+  const view: View = sp.view === 'business' || sp.view === 'combined' ? sp.view : 'personal';
   const db = getDb();
 
-  // Load lookup data for the form
-  const [accounts, categories, rules] = await Promise.all([
+  // Load lookup data for the form. We pull `purpose` so we can filter by view.
+  const [allAccountsRaw, categories, rules] = await Promise.all([
     db
-      .select({ id: schema.accounts.id, name: schema.accounts.name, type: schema.accounts.type })
+      .select({ id: schema.accounts.id, name: schema.accounts.name, type: schema.accounts.type, purpose: schema.accounts.purpose })
       .from(schema.accounts)
       .where(and(eq(schema.accounts.householdId, householdId), eq(schema.accounts.isActive, true)))
       .orderBy(schema.accounts.name),
@@ -61,6 +75,20 @@ export default async function TransactionsPage(props: {
 
   const topCats = categories.filter((c) => !c.parentId).sort((a, b) => a.sortOrder - b.sortOrder);
   const subCats = categories.filter((c) => !!c.parentId);
+
+  // ── View-tab filter ────────────────────────────────────────────────────────
+  // 'shared'-purpose accounts always show in personal AND business views.
+  // 'combined' = no filter at all.
+  const accountFilter: string[] | null = view === 'combined'
+    ? null
+    : allAccountsRaw
+        .filter((a) => a.purpose === view || a.purpose === 'shared')
+        .map((a) => a.id);
+  const noAccountsForView = accountFilter !== null && accountFilter.length === 0;
+  // The form/table only show the accounts visible in the current view.
+  const accounts = view === 'combined'
+    ? allAccountsRaw
+    : allAccountsRaw.filter((a) => a.purpose === view || a.purpose === 'shared');
 
   // ── Calendar-month range for the query ────────────────────────────────────
   const [y, m] = month.split('-').map(Number);
@@ -110,6 +138,11 @@ export default async function TransactionsPage(props: {
         eq(schema.transactions.householdId, householdId),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
+        // View-tab filter — limit to the accounts visible in the current
+        // view (personal / business / combined).
+        accountFilter !== null
+          ? inArray(schema.transactions.accountId, accountFilter)
+          : undefined,
         or(
           // All transactions dated in this calendar month (days 1–end, any billing month)
           and(
@@ -195,8 +228,18 @@ export default async function TransactionsPage(props: {
             )}
           </p>
         </div>
-        <CycleSwitcher month={month} prev={prevMonth} next={nextMonth} label={cycleLabel} />
+        <div className="flex flex-wrap items-center gap-3">
+          <ViewTabs current={view} month={month} />
+          <CycleSwitcher month={month} view={view} prev={prevMonth} next={nextMonth} label={cycleLabel} />
+        </div>
       </header>
+
+      {noAccountsForView && (
+        <div className="rounded-md border border-amber-300/60 bg-amber-50/70 p-3 text-sm text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-100">
+          אין חשבונות מסוג <strong>{view === 'business' ? 'עסקי' : 'אישי'}</strong>. כדי שתצוגה זו תציג נתונים, פתח חשבון מסוג זה תחת{' '}
+          <Link href="/admin/accounts" className="underline">חשבונות</Link>.
+        </div>
+      )}
 
       {sp.error && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
@@ -324,19 +367,55 @@ export default async function TransactionsPage(props: {
 
 // ── CycleSwitcher ─────────────────────────────────────────────────────────────
 
-function CycleSwitcher({ month, prev, next, label }: { month: string; prev: string; next: string; label: string }) {
+function CycleSwitcher({ month, view, prev, next, label }: { month: string; view: View; prev: string; next: string; label: string }) {
+  // Preserve the active view tab when switching months — otherwise navigating
+  // months would silently reset the user back to the default 'personal' view.
+  const buildHref = (m: string) => `/transactions?month=${m}&view=${view}`;
   return (
     <div className="flex items-center gap-1 rounded-lg border bg-card p-1 text-sm shadow-sm">
-      <a href={`/transactions?month=${prev}`} className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground" title={`חודש קודם: ${formatMonthHe(prev)}`}>
+      <a href={buildHref(prev)} className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground" title={`חודש קודם: ${formatMonthHe(prev)}`}>
         <ChevronRight className="size-4" />
       </a>
       <div className="flex min-w-[9rem] flex-col items-center px-2">
         <span className="text-xs font-medium text-primary">{label}</span>
         <span className="font-semibold">{formatMonthHe(month)}</span>
       </div>
-      <a href={`/transactions?month=${next}`} className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground" title={`חודש הבא: ${formatMonthHe(next)}`}>
+      <a href={buildHref(next)} className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground" title={`חודש הבא: ${formatMonthHe(next)}`}>
         <ChevronLeft className="size-4" />
       </a>
+    </div>
+  );
+}
+
+function ViewTabs({ current, month }: { current: View; month: string }) {
+  return (
+    <div
+      role="tablist"
+      aria-label="תצוגת חשבונות"
+      className="inline-flex items-center rounded-md border bg-card p-0.5 shadow-sm"
+    >
+      {VIEW_OPTIONS.map((opt) => {
+        const isActive = current === opt.value;
+        const Icon = opt.icon;
+        return (
+          <Link
+            key={opt.value}
+            href={`/transactions?view=${opt.value}&month=${month}`}
+            role="tab"
+            aria-selected={isActive}
+            title={opt.helpText}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+              isActive
+                ? 'bg-primary-soft text-primary'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon className="size-3.5" />
+            {opt.label}
+          </Link>
+        );
+      })}
     </div>
   );
 }

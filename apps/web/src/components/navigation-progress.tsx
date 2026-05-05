@@ -1,15 +1,22 @@
 'use client';
 
 /**
- * Thin progress bar that sweeps across the top of the viewport whenever
- * a Next.js client-side navigation is in flight.
+ * Navigation feedback shown whenever a Next.js client-side navigation is in
+ * flight. Two layers:
+ *   1. A thick 4px progress bar fixed to the top of the viewport. Sweeps
+ *      from 0% → ~85% quickly, plateaus, jumps to 100% when the new page
+ *      finishes rendering. Uses the accent (teal) colour with a soft glow.
+ *   2. A small floating "טוען…" pill at the top-center of the viewport.
+ *      Pulses gently so the user sees a clear "we're working" signal even
+ *      if the bar happens to be off-screen / out of their eyeline.
  *
- * Uses only React + CSS — no external dependencies.
- * Mount it once inside the root layout (inside the <body>).
+ * Pure React + CSS — no external dependencies.
+ * Mount once inside the root layout (inside the <body>).
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 
 export function NavigationProgress() {
   const pathname = usePathname();
@@ -28,7 +35,6 @@ export function NavigationProgress() {
   useEffect(() => {
     clear();
     setProgress(100);
-    // Fade out after completion
     timerRef.current = setTimeout(() => {
       setVisible(false);
       setProgress(0);
@@ -43,20 +49,17 @@ export function NavigationProgress() {
       const anchor = (e.target as HTMLElement).closest('a');
       if (!anchor) return;
       const href = anchor.getAttribute('href');
-      // Only intercept internal navigation (not external / hash-only links)
       if (!href || href.startsWith('http') || href.startsWith('#') || href.startsWith('mailto')) return;
-      // Don't animate if it's the same page
       if (href === window.location.pathname + window.location.search) return;
 
       clear();
       setVisible(true);
       setProgress(0);
 
-      // Animate progress from 0 → ~85% quickly, then slow down to wait for actual load
       let p = 0;
       function tick() {
         p += p < 30 ? 8 : p < 60 ? 4 : p < 80 ? 1.5 : 0.3;
-        if (p >= 85) p = 85; // plateau — real completion will jump to 100
+        if (p >= 85) p = 85;
         setProgress(p);
         if (p < 85) {
           rafRef.current = requestAnimationFrame(tick);
@@ -72,19 +75,37 @@ export function NavigationProgress() {
   if (!visible && progress === 0) return null;
 
   return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none fixed inset-x-0 top-0 z-[9999] h-[3px]"
-    >
+    <>
+      {/* Top progress bar — 4px tall, accent color, soft glow shadow underneath. */}
       <div
-        className="h-full bg-primary transition-all duration-200 ease-out"
-        style={{
-          width: `${progress}%`,
-          opacity: visible || progress < 100 ? 1 : 0,
-          // Smooth entry, instant jump to 100 % on complete
-          transitionDuration: progress === 100 ? '150ms' : '200ms',
-        }}
-      />
-    </div>
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-x-0 top-0 z-[9999] h-1"
+      >
+        <div
+          className="h-full bg-accent shadow-[0_0_10px_2px_rgba(38,124,116,0.55)] transition-all ease-out"
+          style={{
+            width: `${progress}%`,
+            opacity: visible || progress < 100 ? 1 : 0,
+            transitionDuration: progress === 100 ? '150ms' : '200ms',
+          }}
+        />
+      </div>
+
+      {/* Floating "טוען…" pill — top-center of the viewport. Stays up while
+          navigation is in flight (visible = true). The icon spins so the
+          user sees explicit motion. */}
+      {visible && (
+        <div
+          aria-live="polite"
+          aria-label="טוען"
+          className="pointer-events-none fixed left-1/2 top-3 z-[9999] -translate-x-1/2"
+        >
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-card/95 px-3 py-1 text-xs font-medium text-accent shadow-lg backdrop-blur-sm">
+            <Loader2 className="size-3.5 animate-spin" />
+            טוען…
+          </div>
+        </div>
+      )}
+    </>
   );
 }
