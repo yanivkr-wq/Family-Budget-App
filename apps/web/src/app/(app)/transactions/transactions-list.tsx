@@ -1,15 +1,19 @@
 'use client';
 
 import { useState, useTransition, useMemo } from 'react';
-import Link from 'next/link';
-import { formatIls, formatDateHe } from '@fba/shared';
-import { Sparkles, Trash2, Pencil, Zap, User, Clock, Upload, CalendarClock, CreditCard } from 'lucide-react';
+import { formatIls } from '@fba/shared';
+import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { RuleModal } from './rule-modal';
 import { EditTransactionModal } from './edit-modal';
 import { TransactionsFilter, emptyFilter, isFilterActive, type FilterState } from './transactions-filter';
 import { bulkDeleteTransactions, bulkApplyRule, bulkSetCategory } from './rule-actions';
 import { deleteTransaction } from './actions';
+import {
+  ColumnsCustomizer,
+  useColumnPrefs,
+  type CellContext,
+} from './transactions-columns';
 
 interface Cat { id: string; nameHe: string; color?: string | null }
 interface SubCat extends Cat { parentId: string }
@@ -53,8 +57,6 @@ function sumInstallments(txns: Transaction[]) {
     .reduce((s, t) => s + Math.abs(t.amount), 0);
 }
 
-const COL_COUNT = 10;
-
 export function TransactionsList(props: {
   transactions: Transaction[];
   categories: Cat[];
@@ -73,6 +75,17 @@ export function TransactionsList(props: {
   const [bulkCatId, setBulkCatId]       = useState('');
   const [bulkRuleId, setBulkRuleId]     = useState('');
   const [isPending, startTransition]    = useTransition();
+  const [columnsOpen, setColumnsOpen]   = useState(false);
+
+  // Customizable columns — user can show/hide and reorder via the
+  // "Columns" button. Persisted to localStorage. The leading checkbox
+  // and trailing actions cells are NOT customizable; they're always-on
+  // bookends rendered explicitly below.
+  const { prefs: colPrefs, visibleColumns, setOrder: setColOrder, setVisible: setColVisible, reset: resetCols } = useColumnPrefs();
+
+  // colSpan for full-width rows (section headers, "no transactions" message).
+  // = visible data columns + 2 bookends (checkbox + actions).
+  const COL_COUNT = visibleColumns.length + 2;
 
   const catMap = useMemo(
     () => new Map<string, Cat>([...props.categories, ...props.subCategories].map((c) => [c.id, c])),
@@ -143,14 +156,29 @@ export function TransactionsList(props: {
 
   return (
     <>
-      <TransactionsFilter
-        filter={filter}
-        categories={props.categories}
-        accounts={props.accounts}
-        totalCount={props.transactions.length}
-        filteredCount={visible.length}
-        onChange={setFilter}
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <TransactionsFilter
+            filter={filter}
+            categories={props.categories}
+            accounts={props.accounts}
+            totalCount={props.transactions.length}
+            filteredCount={visible.length}
+            onChange={setFilter}
+          />
+        </div>
+        {/* Customize columns — opens a modal with show/hide toggles + drag
+            handles for reordering. State persists per-browser via localStorage. */}
+        <button
+          type="button"
+          onClick={() => setColumnsOpen(true)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border bg-card px-3 py-2 text-xs font-medium text-foreground/80 hover:bg-accent/40"
+          title="הסתר/הצג עמודות וסדר אותן מחדש"
+        >
+          <Settings2 className="size-3.5" />
+          עמודות
+        </button>
+      </div>
 
       {props.transactions.length === 0 && (
         <section className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -194,14 +222,9 @@ export function TransactionsList(props: {
                 <th className="border-b px-2 py-2 w-8">
                   <input type="checkbox" checked={visible.length > 0 && visible.every((t) => selected.has(t.id))} onChange={(e) => toggleAll(e.target.checked)} aria-label="בחר הכל" />
                 </th>
-                <th className="border-b px-3 py-2 font-medium">תאריך</th>
-                <th className="border-b px-3 py-2 font-medium">בית עסק</th>
-                <th className="border-b px-3 py-2 font-medium">חשבון</th>
-                <th className="border-b px-3 py-2 font-medium">מקור</th>
-                <th className="border-b px-3 py-2 font-medium">קטגוריה</th>
-                <th className="border-b px-3 py-2 text-right font-medium tabular-nums w-28 text-foreground/80">הוצאה</th>
-                <th className="border-b px-3 py-2 text-right font-medium tabular-nums w-28 text-success">הכנסה</th>
-                <th className="border-b px-3 py-2 font-medium">הערות</th>
+                {visibleColumns.map((col) => (
+                  <th key={col.id} className={col.headClass}>{col.label}</th>
+                ))}
                 <th className="border-b px-3 py-2 font-medium"></th>
               </tr>
             </thead>
@@ -264,6 +287,22 @@ export function TransactionsList(props: {
                   const txIsManual   = t.isManual !== false;
                   const isInstallment = !!t.installmentPlanId;
 
+                  // Build the cell-render context once per row. Each visible
+                  // column's renderCell picks what it needs from this bag.
+                  const cellCtx: CellContext = {
+                    t,
+                    cat:    cat    ?? null,
+                    subCat: subCat ?? null,
+                    acc:    acc    ?? null,
+                    isInstallment,
+                    isAutoRule,
+                    isLlm,
+                    txIsManual,
+                    chargeDateDiffersFromGroup,
+                    isPendingCharge,
+                    effectiveChargeDate,
+                  };
+
                   return (
                     <tr
                       key={t.id}
@@ -276,106 +315,20 @@ export function TransactionsList(props: {
                         isInstallment && 'border-r-2 border-r-primary/60',
                       )}
                     >
+                      {/* Selection checkbox (always-on bookend) */}
                       <td className="px-2 py-2 align-top">
                         <input type="checkbox" checked={isSelected} onChange={(e) => toggleOne(t.id, e.target.checked)} />
                       </td>
 
-                      {/* Date — clean, no per-row charge badge in the common
-                          case. The section header already labels when the
-                          group bills. We only surface a row-level badge when
-                          the row's chargeDate diverges from the group default
-                          (rare — e.g., foreign-currency CC). */}
-                      <td className="px-3 py-2 align-top tabular-nums">
-                        <div>{formatDateHe(t.date)}</div>
-                        {chargeDateDiffersFromGroup && isPendingCharge && (
-                          <div
-                            className="mt-0.5 inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                            title={`חיוב יחיד בתאריך אחר מהקבוצה: ${effectiveChargeDate}`}
-                          >
-                            <Clock className="size-2.5 shrink-0" />
-                            יחויב {formatDateHe(effectiveChargeDate!)}
-                          </div>
-                        )}
-                      </td>
+                      {/* Customizable middle columns — render in user's
+                          chosen order, hiding ones they unchecked. */}
+                      {visibleColumns.map((col) => (
+                        <td key={col.id} className={col.cellClass}>
+                          {col.renderCell(cellCtx)}
+                        </td>
+                      ))}
 
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span>{t.merchant}</span>
-                          {isInstallment && (
-                            // Plan-payment pill — clickable, takes the user to
-                            // the installments admin to manage the plan.
-                            <Link
-                              href="/installments"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
-                              title="חלק מתוכנית תשלומים — פתח את הניהול"
-                            >
-                              <CreditCard className="size-2.5 shrink-0" />
-                              <span>
-                                {t.installmentTotalPayments
-                                  ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
-                                  : `תשלום ${t.installmentCurrentPaymentNo}`}
-                              </span>
-                              {t.installmentEndMonth && (
-                                <span className="opacity-70">
-                                  · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
-                                </span>
-                              )}
-                            </Link>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 align-top text-muted-foreground">{acc?.name ?? '—'}</td>
-
-                      {/* Source badge */}
-                      <td className="px-3 py-2 align-top">
-                        {txIsManual ? (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="הוזן ידנית">
-                            <User className="size-2.5" />ידני
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" title="יובא מקובץ / אוטומטי">
-                            <Upload className="size-2.5" />ייבוא
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Category */}
-                      <td className="px-3 py-2 align-top">
-                        {cat ? (
-                          <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-1 flex-wrap">
-                              <span className="pill text-xs" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
-                              {isAutoRule && (
-                                <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" title={`כלל: ${t.ruleName ?? 'ללא שם'}`}>
-                                  <Zap className="size-2.5" />כלל
-                                </span>
-                              )}
-                              {isLlm && (
-                                <span className="inline-flex items-center gap-0.5 rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="הוצע על ידי AI">
-                                  <Sparkles className="size-2.5" />AI
-                                </span>
-                              )}
-                            </div>
-                            {subCat && <span className="text-[11px] text-muted-foreground">↳ {subCat.nameHe}</span>}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
-
-                      {/* הוצאה — right-aligned, shows minus sign */}
-                      <td className="px-3 py-2 text-right align-top tabular-nums">
-                        {t.amount < 0 ? formatIls(t.amount) : ''}
-                      </td>
-
-                      {/* הכנסה — right-aligned, green */}
-                      <td className="px-3 py-2 text-right align-top tabular-nums text-success">
-                        {t.amount >= 0 ? formatIls(t.amount) : ''}
-                      </td>
-
-                      <td className="max-w-xs truncate px-3 py-2 align-top text-muted-foreground" title={t.notes ?? ''}>{t.notes}</td>
-
+                      {/* Action buttons (always-on bookend) */}
                       <td className="px-3 py-2 align-top">
                         <div className="flex items-center justify-end gap-1">
                           <button type="button" onClick={() => setEditTxnId(t.id)} className="rounded-md p-1.5 text-foreground/70 hover:bg-accent/40" title="ערוך תנועה" aria-label="ערוך תנועה">
@@ -541,6 +494,16 @@ export function TransactionsList(props: {
           />
         );
       })()}
+
+      {columnsOpen && (
+        <ColumnsCustomizer
+          prefs={colPrefs}
+          onClose={() => setColumnsOpen(false)}
+          onSetOrder={setColOrder}
+          onSetVisible={setColVisible}
+          onReset={resetCols}
+        />
+      )}
     </>
   );
 }
