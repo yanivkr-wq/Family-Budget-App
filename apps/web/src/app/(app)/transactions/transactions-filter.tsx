@@ -121,9 +121,9 @@ export function TransactionsFilter(props: {
           value={filter.flag}
           onChange={(e) => set({ flag: e.target.value as FilterState['flag'] })}
           className="rounded-md border bg-background px-2 py-1.5 text-sm"
-          title="סנן לפי תג"
+          title="סנן לפי דגל"
         >
-          <option value="all">כל התגים</option>
+          <option value="all">כל הדגלים</option>
           <option value="recurring">קבועות בלבד</option>
           <option value="installment">תשלומים בלבד</option>
           <option value="one-off">חד-פעמיות בלבד</option>

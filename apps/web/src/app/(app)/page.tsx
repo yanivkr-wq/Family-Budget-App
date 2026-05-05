@@ -16,6 +16,7 @@ import { InsightsCatalogToggle } from './dashboard-insights-catalog';
 import { DashboardChatHint } from './dashboard-chat-hint';
 import { GoalIcon } from '@/components/ui/goal-icon';
 import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
+import { readActiveView } from '@/components/view-tabs-server';
 import {
   Wallet,
   TrendingDown,
@@ -46,7 +47,10 @@ export default async function DashboardPage(props: {
   const session = await auth();
   const householdId = session!.user.householdId;
   const sp = await props.searchParams;
-  const view: View = sp.view === 'business' || sp.view === 'combined' ? sp.view : 'personal';
+  // Resolve view from URL param → fba_view cookie → 'combined' default.
+  // The cookie is written by <ViewTabs> on click, so the active view follows
+  // the user across pages even when the URL doesn't carry an explicit ?view.
+  const view: View = await readActiveView(sp.view);
   const db = getDb();
 
   // ---- Pick default month: most recent past month with actual data ----
@@ -1146,7 +1150,12 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
                     // Client island — opens a modal popup with the calculation
                     // breakdown. Stops click propagation so it doesn't trigger
                     // the row's parent <Link>.
-                    <InsightDetailsToggle title={insight.title} explanation={insight.explanation} />
+                    <InsightDetailsToggle
+                      title={insight.title}
+                      explanation={insight.explanation}
+                      icon={insight.icon}
+                      iconColorClass={cfg.iconColor}
+                    />
                   )}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{insight.body}</p>

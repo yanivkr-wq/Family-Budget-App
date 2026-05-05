@@ -1,13 +1,17 @@
+'use client';
+
 /**
- * Shared view-tabs component (אישי / עסקי / משולב) used by the dashboard and
- * the transactions page. Plus a tiny <ViewStripe> that renders a 2px colored
+ * Shared view-tabs component (משולב / אישי / עסקי) used by the dashboard and
+ * the transactions page. Plus a tiny <ViewStripe> that renders a colored
  * bar in the active view's color — gives the user a peripheral-vision anchor
  * for "which context am I in" without introducing a heavy color theme.
  *
- * Color choices:
- *   • אישי   → soft blue   (calm / private)
- *   • עסקי   → soft slate  (neutral / serious)
- *   • משולב  → existing teal-primary (no specific identity, "the union")
+ * Cross-page persistence: clicking a tab writes the active view to a long-
+ * lived cookie (`fba_view`). Server pages read that cookie via
+ * `readActiveView()` and use it as the default when the URL doesn't carry
+ * an explicit `?view=` param. So toggling to "עסקי" on the dashboard and
+ * then clicking "תנועות" in the sidebar lands you on /transactions ALSO
+ * filtered to business — the active view follows you across pages.
  *
  * Each page passes an hrefBuilder so the URLs can include page-specific
  * query params (e.g. month).
@@ -16,6 +20,9 @@
 import Link from 'next/link';
 import { User as UserIcon, Briefcase, Users, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+const VIEW_COOKIE = 'fba_view';
+const COOKIE_MAX_AGE_S = 60 * 60 * 24 * 365; // 1 year
 
 export type View = 'personal' | 'business' | 'combined';
 
@@ -78,6 +85,14 @@ export function ViewTabs({
   current: View;
   hrefBuilder: (v: View) => string;
 }) {
+  // On click, write the chosen view to a cookie so subsequent server-rendered
+  // pages can read it as the default. We do this BEFORE the navigation so the
+  // next page's RSC has the cookie already present.
+  function rememberView(v: View) {
+    if (typeof document === 'undefined') return;
+    document.cookie = `${VIEW_COOKIE}=${v}; path=/; max-age=${COOKIE_MAX_AGE_S}; SameSite=Lax`;
+  }
+
   return (
     <div
       role="tablist"
@@ -91,6 +106,7 @@ export function ViewTabs({
           <Link
             key={opt.value}
             href={hrefBuilder(opt.value)}
+            onClick={() => rememberView(opt.value)}
             role="tab"
             aria-selected={isActive}
             title={opt.helpText}

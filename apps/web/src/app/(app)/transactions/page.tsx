@@ -10,6 +10,7 @@ import { MonthSwitcher } from './month-switcher';
 import { autoComputeChargeDate } from '@/lib/charge-date';
 import { Clock, CheckCircle2, CalendarClock } from 'lucide-react';
 import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
+import { readActiveView } from '@/components/view-tabs-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +32,10 @@ export default async function TransactionsPage(props: {
   const sp = await props.searchParams;
   // `month` here is a calendar month, e.g. "2026-05"
   const month = sp.month ?? activeBillingMonth(10);
-  // View tab: filters to accounts of a given purpose. 'shared' accounts always show.
-  const view: View = sp.view === 'business' || sp.view === 'combined' ? sp.view : 'personal';
+  // View tab: filters to accounts of a given purpose. Resolved from URL →
+  // fba_view cookie → 'combined' default; cookie keeps the view sticky as
+  // the user moves between pages.
+  const view: View = await readActiveView(sp.view);
   const db = getDb();
 
   // Load lookup data for the form. We pull `purpose` so we can filter by view.

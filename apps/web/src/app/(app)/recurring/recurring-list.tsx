@@ -122,7 +122,7 @@ export function RecurringList({
                       {FREQ_LABEL[p.frequency] ?? p.frequency}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{p.lastSeenMonth}</td>
-                    <td className="px-3 py-2 text-center tabular-nums">{p.occurrenceCount}</td>
+                    <td className="px-3 py-2 tabular-nums">{p.occurrenceCount}</td>
                     <td className="px-3 py-2">
                       <span
                         className={`rounded-full px-2 py-0.5 text-xs font-medium ${

@@ -138,7 +138,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
 
   flag: {
     id: 'flag',
-    label: 'תג',
+    label: 'דגל',
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
