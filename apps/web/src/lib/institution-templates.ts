@@ -205,6 +205,72 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     dateFormat: 'dd/mm/yyyy',
     defaultIsExpense: true,
   },
+
+  // -------- Israeli "bank-portal" CC export (Diners via Leumi, Visa via Discount, etc.) --------
+  // The bank's online portal exports your CC charges. Same structure regardless
+  // of which bank/CC. Single sheet, 7 columns. The charge date is in a header
+  // row above the data ("עסקאות לחיוב ב-DD/MM/YYYY") — currently we lose it,
+  // but we can derive billing_month later from the row dates + cutoff_day.
+  // Forex: col 2 (סכום עסקה) carries the original amount with a non-₪ prefix
+  // ("$ 20.00"). We don't extract the original currency in v1; col 3 always
+  // gives the ILS-converted charge which is what the user actually pays.
+  {
+    id: 'il-cc-bank-export',
+    name: 'CC export מבנק (לאומי / דיסקונט / וכד׳)',
+    type: 'credit_card',
+    detectionKeywords: [
+      'פירוט עסקאות לחשבון',
+      'סכום עסקה',
+      'סכום חיוב',
+      'עסקאות לחיוב ב',
+    ],
+    headerRowIndex: 'auto',
+    columns: {
+      transactionDate: 0, // תאריך עסקה
+      merchant:        1, // שם בית עסק
+      amount:          3, // סכום חיוב — always ILS, after FX conversion
+      type:            4, // סוג עסקה (רגילה / הוראת קבע / שירותים / תשלומים)
+      notes:           6, // הערות (sometimes carries "עסקה בקליטה" for pending)
+    },
+    amountConvention: 'signed',
+    dateFormat: 'dd/mm/yyyy',
+    defaultIsExpense: true,
+  },
+
+  // -------- Discount Key (מפתח דיסקונט) — multi-card aggregator export --------
+  // Two sheets: regular ILS transactions + a separate forex/חו"ל sheet. 16 cols
+  // with proper per-row charge dates, original-currency support, and embedded
+  // installment markers in the notes ("תשלום N מתוך Y"). One file can contain
+  // multiple cards (col 3 = last 4 digits) — the upload action handles
+  // per-card → account routing on top of the parsed rows.
+  {
+    id: 'discount-key',
+    name: 'מפתח דיסקונט (Discount Key)',
+    type: 'credit_card',
+    detectionKeywords: [
+      'מפתח דיסקונט',
+      'כל הכרטיסים',
+      'תאריך חיוב',
+      'מטבע חיוב',
+      '4 ספרות אחרונות',
+    ],
+    headerRowIndex: 'auto',
+    columns: {
+      transactionDate:  0,  // תאריך עסקה
+      merchant:         1,  // שם בית העסק
+      // col 2 = קטגוריה (the bank's own — useful as a hint, not mapped)
+      // col 3 = 4 ספרות אחרונות של כרטיס האשראי (handled by upload action)
+      type:             4,  // סוג עסקה (רגילה / תשלומים / חיוב עסקות מיידי / etc.)
+      amount:           5,  // סכום חיוב — always ILS
+      originalAmount:   7,  // סכום עסקה מקורי
+      originalCurrency: 8,  // מטבע עסקה מקורי
+      chargeDate:       9,  // תאריך חיוב — actual per-row charge date
+      notes:            10, // הערות — installment info ("תשלום N מתוך Y") lives here
+    },
+    amountConvention: 'signed',
+    dateFormat: 'dd-mm-yyyy',
+    defaultIsExpense: true,
+  },
 ];
 
 /** Score how well a parsed file matches a template. Higher score = better match. */
