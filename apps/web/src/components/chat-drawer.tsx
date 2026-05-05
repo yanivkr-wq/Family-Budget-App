@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { he } from '@fba/shared';
 import { cn } from '@/lib/utils';
-import { MessageCircle, Send, X } from 'lucide-react';
+import { MessageCircle, Send, X, RotateCcw } from 'lucide-react';
 import { ChatThinkingIndicator } from '@/components/chat-thinking-indicator';
 
 interface AssistantMessage {
@@ -255,13 +255,34 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
       >
         <header className="flex items-center justify-between border-b p-4">
           <h2 className="text-lg font-semibold">{he.chat.title}</h2>
-          <button
-            onClick={() => setOpen(false)}
-            className="rounded-md p-1 hover:bg-accent"
-            aria-label={he.common.cancel}
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {/* Reset chat — clears all messages, drops the session id, and
+                returns the drawer to the initial empty-state with the
+                suggestion chips. Useful when you want to ask a fresh
+                question without prior context biasing the answer. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (isStreaming) return;        // can't reset mid-stream
+                setMessages([]);
+                setSessionId(null);
+                setActiveToolCalls([]);
+              }}
+              disabled={isStreaming || messages.length === 0}
+              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+              aria-label="התחל שיחה חדשה"
+              title="התחל שיחה חדשה"
+            >
+              <RotateCcw className="size-4" />
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              className="rounded-md p-1 hover:bg-accent"
+              aria-label={he.common.cancel}
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </header>
 
         {/* Top-of-drawer banner — appears whenever the assistant is working
