@@ -1065,3 +1065,235 @@ function emptyResult(partial: Partial<ImportResult>): ImportResult {
     ...partial,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// importBankExport — for raw bank/CC portal exports.
+//
+// Flow:
+//   1. User picks an account + uploads a single Excel/CSV file
+//   2. We run smartImport which detects the institution template + parses rows
+//   3. Each parsed row becomes a transactions row, scoped to the chosen account
+//   4. external_id = SHA1 hash of (date|chargeDate|amount|merchant|notes) so
+//      re-uploading the same file is a no-op (onConflictDoNothing handles it)
+//   5. Return a summary the UI can render
+//
+// Out of scope for v1:
+//   • Multi-card files (Discount Key with 4 cards) — all rows currently land
+//     in the chosen account. Card-splitting UI is a future feature; for now
+//     the user can either pre-filter the file in Excel OR accept the lump.
+//   • Installment auto-detection — separate layer, runs after import lands.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface BankExportImportResult {
+  ok:                boolean;
+  templateUsed:      { id: string; name: string } | null;
+  inserted:          number;
+  duplicates:        number;
+  pendingSkipped:    number;          // rows where parser silently skipped (Format A pending)
+  forexRows:         number;          // count of rows flagged as forex
+  installmentRows:   number;          // count of rows whose notes carry "תשלום N מתוך Y"
+  rowsParsed:        number;          // total rows the parser produced
+  errors:            Array<{ row: number; reason: string }>;
+  /** Distinct card-last-4 values found in the file (Format B). When >1, the
+   *  UI shows a "this file has multiple cards — all routed to <account>"
+   *  warning so the user can decide whether to split. */
+  distinctCards:     string[];
+  needsManualMapping: boolean;
+  message?:          string;
+}
+
+import { createHash } from 'node:crypto';
+import * as XLSX from 'xlsx';
+import { smartImport } from '@/lib/smart-importer';
+
+function hashRowId(date: string, chargeDate: string | null, amount: number, merchant: string, notes: string | null): string {
+  const key = [date, chargeDate ?? '', amount.toFixed(2), merchant.trim(), (notes ?? '').trim()].join('|');
+  return createHash('sha1').update(key).digest('hex').slice(0, 24);
+}
+
+/** Pull distinct card-last-4 values from a Discount-Key-style workbook. We
+ *  read the file twice (once here for cards, once via smartImport for
+ *  transactions) — fine for an interactive UX because files are small. */
+function extractDistinctCards(buffer: Buffer): string[] {
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const cards = new Set<string>();
+    for (const sheetName of wb.SheetNames) {
+      const ws = wb.Sheets[sheetName];
+      if (!ws) continue;
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, defval: '', blankrows: false });
+      for (const row of rows) {
+        if (!Array.isArray(row)) continue;
+        const cell = String(row[3] ?? '').trim();
+        // Card last-4 is always 4 digits — anything else is header text or a
+        // different format entirely.
+        if (/^\d{4}$/.test(cell)) cards.add(cell);
+      }
+    }
+    return Array.from(cards).sort();
+  } catch {
+    return [];
+  }
+}
+
+export async function importBankExport(formData: FormData): Promise<BankExportImportResult> {
+  const file = formData.get('file');
+  const accountId = String(formData.get('accountId') ?? '').trim();
+
+  if (!(file instanceof File) || file.size === 0) {
+    return {
+      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
+      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
+      needsManualMapping: false, message: 'לא נבחר קובץ',
+    };
+  }
+  if (!accountId) {
+    return {
+      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
+      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
+      needsManualMapping: false, message: 'יש לבחור חשבון',
+    };
+  }
+
+  const ctx = await requireSession();
+  const db = getDb();
+
+  // Verify the chosen account belongs to this household + grab its cutoff
+  // for billing-month computation when the file doesn't carry a chargeDate.
+  const [account] = await db
+    .select({
+      id: schema.accounts.id,
+      cutoffDay: schema.accounts.cutoffDay,
+      paymentSchedule: schema.accounts.paymentSchedule,
+    })
+    .from(schema.accounts)
+    .where(and(
+      eq(schema.accounts.id, accountId),
+      eq(schema.accounts.householdId, ctx.householdId),
+    ))
+    .limit(1);
+  if (!account) {
+    return {
+      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
+      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
+      needsManualMapping: false, message: 'החשבון שנבחר לא נמצא',
+    };
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const isExcel = /\.(xlsx|xls)$/i.test(file.name);
+
+  const parsed = await smartImport(buffer, isExcel);
+
+  if (parsed.needsManualMapping) {
+    return {
+      ok: false, templateUsed: null, inserted: 0, duplicates: 0, pendingSkipped: 0,
+      forexRows: 0, installmentRows: 0, rowsParsed: 0, errors: [], distinctCards: [],
+      needsManualMapping: true,
+      message: 'לא זוהה תבנית מתאימה לקובץ. ניתן להשתמש בייבוא הגנרי או להוסיף תבנית.',
+    };
+  }
+
+  if (!parsed.success || parsed.transactions.length === 0) {
+    return {
+      ok: false,
+      templateUsed: parsed.templateUsed && { id: parsed.templateUsed.id, name: parsed.templateUsed.name },
+      inserted: 0, duplicates: 0, pendingSkipped: 0,
+      forexRows: 0, installmentRows: 0, rowsParsed: 0,
+      errors: parsed.errors, distinctCards: [], needsManualMapping: false,
+      message: 'הקובץ לא הניב שורות תקינות',
+    };
+  }
+
+  const distinctCards = extractDistinctCards(buffer);
+
+  // Build inserts. installment_info column on the source maps to is_installment
+  // boolean here; the auto-link to a specific installment_plan happens in a
+  // separate step (future commit).
+  const inserts = parsed.transactions.map((t) => {
+    const billingMonth = t.chargeDate
+      ? t.chargeDate.slice(0, 7)
+      : computeBillingMonth(t.transactionDate, account.cutoffDay);
+
+    const hasInstallmentNote = /תשלום\s*\d+\s*מתוך\s*\d+/.test(t.notes ?? '');
+
+    return {
+      householdId: ctx.householdId,
+      accountId,
+      transactionDate: t.transactionDate,
+      chargeDate: t.chargeDate,
+      billingMonth,
+      amountIls: String(t.amountIls),
+      currency: 'ILS',
+      ...(t.originalAmount !== null ? { originalAmount: String(t.originalAmount) } : {}),
+      ...(t.originalCurrency !== null ? { originalCurrency: t.originalCurrency } : {}),
+      merchantRaw: t.merchantRaw,
+      merchantNormalized: normalizeMerchant(t.merchantRaw),
+      notes: t.notes,
+      isManual: false,
+      isInstallment: hasInstallmentNote,
+      externalId: hashRowId(t.transactionDate, t.chargeDate, t.amountIls, t.merchantRaw, t.notes),
+    };
+  });
+
+  let inserted = 0;
+  if (inserts.length > 0) {
+    const BATCH = 500;
+    for (let i = 0; i < inserts.length; i += BATCH) {
+      const batch = inserts.slice(i, i + BATCH);
+      const result = await db
+        .insert(schema.transactions)
+        .values(batch)
+        .onConflictDoNothing()
+        .returning({ id: schema.transactions.id });
+      inserted += result.length;
+    }
+    const duplicates = inserts.length - inserted;
+
+    // Audit trail
+    await db.insert(schema.auditLog).values({
+      householdId: ctx.householdId,
+      actorUserId: ctx.userId,
+      action: 'import',
+      entityType: 'transaction',
+      afterJson: {
+        source: 'bank-export',
+        template: parsed.templateUsed?.id,
+        filename: file.name,
+        accountId,
+        inserted,
+        duplicates,
+        forexRows: parsed.transactions.filter((t) => t.isForex).length,
+        installmentRows: inserts.filter((i) => i.isInstallment).length,
+        distinctCards,
+      } as object,
+    });
+
+    revalidatePath('/');
+    revalidatePath('/transactions');
+    revalidatePath('/import');
+
+    return {
+      ok: true,
+      templateUsed: { id: parsed.templateUsed!.id, name: parsed.templateUsed!.name },
+      inserted,
+      duplicates,
+      pendingSkipped: 0,
+      forexRows: parsed.transactions.filter((t) => t.isForex).length,
+      installmentRows: inserts.filter((i) => i.isInstallment).length,
+      rowsParsed: parsed.transactions.length,
+      errors: parsed.errors,
+      distinctCards,
+      needsManualMapping: false,
+    };
+  }
+
+  return {
+    ok: false,
+    templateUsed: { id: parsed.templateUsed!.id, name: parsed.templateUsed!.name },
+    inserted: 0, duplicates: 0, pendingSkipped: 0,
+    forexRows: 0, installmentRows: 0, rowsParsed: 0,
+    errors: parsed.errors, distinctCards: [], needsManualMapping: false,
+    message: 'הקובץ לא הניב שורות תקינות',
+  };
+}
