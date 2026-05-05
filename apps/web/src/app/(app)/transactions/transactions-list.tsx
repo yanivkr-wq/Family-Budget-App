@@ -2,7 +2,7 @@
 
 import { useState, useTransition, useMemo } from 'react';
 import { formatIls } from '@fba/shared';
-import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2 } from 'lucide-react';
+import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2, Repeat } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { RuleModal } from './rule-modal';
 import { EditTransactionModal } from './edit-modal';
@@ -40,6 +40,12 @@ interface Transaction {
   installmentCurrentPaymentNo?: number | null;
   installmentTotalPayments?: number | null;
   installmentEndMonth?: string | null;  // 'YYYY-MM'
+  // Recurring-pattern link. When recurringPatternId is non-null, this row's
+  // merchant matches one of the user's active recurring patterns
+  // (subscriptions / monthly bills) — render a "🔄 קבוע" pill, contributes
+  // to the section-header recurring subtotal.
+  recurringPatternId?:        string | null;
+  recurringPatternFrequency?: string | null; // 'monthly' | 'bimonthly' etc.
 }
 
 function sumExpenses(txns: Transaction[]) {
@@ -54,6 +60,13 @@ function sumIncome(txns: Transaction[]) {
 function sumInstallments(txns: Transaction[]) {
   return txns
     .filter((t) => t.installmentPlanId && t.amount < 0)
+    .reduce((s, t) => s + Math.abs(t.amount), 0);
+}
+/** Sum of recurring-pattern expenses in a slice (excluding installments
+ *  to avoid double-counting — installments have their own subtotal). */
+function sumRecurring(txns: Transaction[]) {
+  return txns
+    .filter((t) => t.recurringPatternId && !t.installmentPlanId && t.amount < 0)
     .reduce((s, t) => s + Math.abs(t.amount), 0);
 }
 
@@ -348,7 +361,7 @@ export function TransactionsList(props: {
 
                 // ── Section header helper ─────────────────────────────────
                 const SectionHeader = ({
-                  icon, label, count, expenses, income, installments,
+                  icon, label, count, expenses, income, installments, recurring,
                   colorClass, bgClass,
                 }: {
                   icon: React.ReactNode;
@@ -361,6 +374,11 @@ export function TransactionsList(props: {
                    *  knows how much of the cycle is locked into payment
                    *  plans they've already committed to. */
                   installments: number;
+                  /** Subtotal of expenses matching an active recurring
+                   *  pattern (subscriptions / monthly bills). Mutually
+                   *  exclusive with installments above (sumRecurring
+                   *  filters those out). */
+                  recurring:    number;
                   colorClass: string;
                   bgClass: string;
                 }) => (
@@ -370,7 +388,7 @@ export function TransactionsList(props: {
                         {icon}
                         <span>{label}</span>
                         <span className="rounded-full bg-current/10 px-1.5 py-0.5 text-[11px] font-medium opacity-80">{count}</span>
-                        <span className="ms-auto flex gap-4 tabular-nums font-normal">
+                        <span className="ms-auto flex flex-wrap gap-x-4 gap-y-0.5 tabular-nums font-normal">
                           {expenses > 0 && (
                             <span>
                               הוצאות: <strong className="font-semibold">{formatIls(expenses, { decimals: false })}</strong>
@@ -379,6 +397,14 @@ export function TransactionsList(props: {
                                   <CreditCard className="size-3 shrink-0" />
                                   <span className="text-[11px]">
                                     מהן <strong className="font-semibold tabular-nums">{formatIls(installments, { decimals: false })}</strong> בתשלומים
+                                  </span>
+                                </span>
+                              )}
+                              {recurring > 0 && (
+                                <span className="ms-1 inline-flex items-center gap-0.5 text-muted-foreground">
+                                  <Repeat className="size-3 shrink-0" />
+                                  <span className="text-[11px]">
+                                    מהן <strong className="font-semibold tabular-nums">{formatIls(recurring, { decimals: false })}</strong> בקבועות
                                   </span>
                                 </span>
                               )}
@@ -403,6 +429,7 @@ export function TransactionsList(props: {
                           expenses={sumExpenses(immediateTxns)}
                           income={sumIncome(immediateTxns)}
                           installments={sumInstallments(immediateTxns)}
+                          recurring={sumRecurring(immediateTxns)}
                           colorClass="text-success"
                           bgClass="bg-success/5 border-success/20"
                         />
@@ -422,6 +449,7 @@ export function TransactionsList(props: {
                           expenses={sumExpenses(carryOver)}
                           income={sumIncome(carryOver)}
                           installments={sumInstallments(carryOver)}
+                          recurring={sumRecurring(carryOver)}
                           colorClass="text-amber-700 dark:text-amber-400"
                           bgClass="bg-amber-50/40 border-amber-200/50 dark:bg-amber-900/10 dark:border-amber-800/30"
                         />
@@ -441,6 +469,7 @@ export function TransactionsList(props: {
                           expenses={sumExpenses(currentCycle)}
                           income={sumIncome(currentCycle)}
                           installments={sumInstallments(currentCycle)}
+                          recurring={sumRecurring(currentCycle)}
                           colorClass={isCycleCharged ? 'text-success' : 'text-amber-700 dark:text-amber-400'}
                           bgClass={isCycleCharged ? 'bg-success/5 border-success/20' : 'bg-amber-50/60 border-amber-200/60 dark:bg-amber-900/10 dark:border-amber-800/40'}
                         />
@@ -458,6 +487,7 @@ export function TransactionsList(props: {
                           expenses={sumExpenses(nextCycle)}
                           income={sumIncome(nextCycle)}
                           installments={sumInstallments(nextCycle)}
+                          recurring={sumRecurring(nextCycle)}
                           colorClass="text-blue-700 dark:text-blue-300"
                           bgClass="bg-blue-50/50 border-blue-200/50 dark:bg-blue-900/10 dark:border-blue-800/40"
                         />

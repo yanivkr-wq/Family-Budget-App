@@ -37,7 +37,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CreditCard, GripVertical, Sparkles, Upload, User, X, Zap, Clock } from 'lucide-react';
+import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock } from 'lucide-react';
 import { formatIls, formatDateHe } from '@fba/shared';
 import { cn } from '@/lib/utils';
 
@@ -73,6 +73,8 @@ export interface CellContext {
     installmentCurrentPaymentNo?: number | null;
     installmentTotalPayments?: number | null;
     installmentEndMonth?: string | null;
+    recurringPatternId?: string | null;
+    recurringPatternFrequency?: string | null;
   };
   cat: Cat | null;
   subCat: Cat | null;
@@ -128,35 +130,52 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
-    renderCell: ({ t, isInstallment }) => (
-      // Stacked layout to mirror the category column (cat on top, sub-cat
-      // below): merchant on top, installment pill below — both anchored to
-      // the right (start in RTL) so they line up consistently regardless
-      // of merchant text length.
-      <div className="flex flex-col items-start gap-0.5">
-        <span>{t.merchant}</span>
-        {isInstallment && (
-          <Link
-            href="/installments"
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
-            title="חלק מתוכנית תשלומים — פתח את הניהול"
-          >
-            <CreditCard className="size-2.5 shrink-0" />
-            <span>
-              {t.installmentTotalPayments
-                ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
-                : `תשלום ${t.installmentCurrentPaymentNo}`}
-            </span>
-            {t.installmentEndMonth && (
-              <span className="opacity-70">
-                · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
+    renderCell: ({ t, isInstallment }) => {
+      // Recurring pill is mutually exclusive with the installment pill —
+      // installments take precedence (more specific signal: they end after
+      // N payments, recurring goes on indefinitely).
+      const isRecurring = !isInstallment && !!t.recurringPatternId;
+      return (
+        // Stacked layout to mirror the category column (cat on top, sub-cat
+        // below): merchant on top, status pill below — both anchored to
+        // the right (start in RTL) so they line up consistently regardless
+        // of merchant text length.
+        <div className="flex flex-col items-start gap-0.5">
+          <span>{t.merchant}</span>
+          {isInstallment && (
+            <Link
+              href="/installments"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+              title="חלק מתוכנית תשלומים — פתח את הניהול"
+            >
+              <CreditCard className="size-2.5 shrink-0" />
+              <span>
+                {t.installmentTotalPayments
+                  ? `תשלום ${t.installmentCurrentPaymentNo}/${t.installmentTotalPayments}`
+                  : `תשלום ${t.installmentCurrentPaymentNo}`}
               </span>
-            )}
-          </Link>
-        )}
-      </div>
-    ),
+              {t.installmentEndMonth && (
+                <span className="opacity-70">
+                  · עד {t.installmentEndMonth.slice(5, 7)}/{t.installmentEndMonth.slice(2, 4)}
+                </span>
+              )}
+            </Link>
+          )}
+          {isRecurring && (
+            <Link
+              href="/recurring"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/25"
+              title="תואם להוצאה קבועה — פתח את הניהול"
+            >
+              <Repeat className="size-2.5 shrink-0" />
+              <span>קבוע</span>
+            </Link>
+          )}
+        </div>
+      );
+    },
   },
 
   account: {

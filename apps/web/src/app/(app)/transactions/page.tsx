@@ -114,6 +114,11 @@ export default async function TransactionsPage(props: {
       installmentCurrentPaymentNo: schema.installmentPlans.currentPaymentNo,
       installmentTotalPayments:    schema.installmentPlans.totalPayments,
       installmentEndMonth:         schema.installmentPlans.projectedEndMonth,
+      // Match by merchant against the user's recurring patterns. When the
+      // merchant matches an active pattern, the row gets a "🔄 קבוע" badge
+      // and contributes to the cycle-header recurring subtotal.
+      recurringPatternId:        schema.recurringPatterns.id,
+      recurringPatternFrequency: schema.recurringPatterns.frequency,
     })
     .from(schema.transactions)
     .leftJoin(
@@ -123,6 +128,14 @@ export default async function TransactionsPage(props: {
     .leftJoin(
       schema.installmentPlans,
       eq(schema.transactions.installmentPlanId, schema.installmentPlans.id),
+    )
+    .leftJoin(
+      schema.recurringPatterns,
+      and(
+        eq(schema.recurringPatterns.householdId, schema.transactions.householdId),
+        eq(schema.recurringPatterns.merchantNormalized, schema.transactions.merchantNormalized),
+        eq(schema.recurringPatterns.status, 'active'),
+      ),
     )
     .where(
       and(
@@ -352,6 +365,8 @@ export default async function TransactionsPage(props: {
           installmentCurrentPaymentNo: t.installmentCurrentPaymentNo,
           installmentTotalPayments:    t.installmentTotalPayments,
           installmentEndMonth:         t.installmentEndMonth,
+          recurringPatternId:        t.recurringPatternId,
+          recurringPatternFrequency: t.recurringPatternFrequency,
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}
