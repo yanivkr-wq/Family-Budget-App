@@ -89,10 +89,10 @@ export function ChatThinkingIndicator({
     return (
       <div
         dir="rtl"
-        className="flex items-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1.5 text-xs text-accent"
+        className="flex items-center gap-2 rounded-md border-2 border-accent/40 bg-accent/15 px-3 py-2 text-xs text-accent shadow-sm"
       >
-        <Loader2 className="size-3.5 shrink-0 animate-spin" />
-        <span className="font-medium">{headline}</span>
+        <Loader2 className="size-4 shrink-0 animate-spin" />
+        <span className="font-semibold">{headline}</span>
       </div>
     );
   }
@@ -100,12 +100,12 @@ export function ChatThinkingIndicator({
   return (
     <div
       dir="rtl"
-      className="space-y-2 rounded-md border border-accent/30 bg-accent/5 p-3 text-xs"
+      className="space-y-2 rounded-md border-2 border-accent/40 bg-accent/15 p-3 text-xs shadow-sm"
     >
       {/* Headline row */}
       <div className="flex items-center gap-2 text-accent">
-        <Loader2 className="size-4 shrink-0 animate-spin" />
-        <span className="text-sm font-semibold">{headline}</span>
+        <Loader2 className="size-5 shrink-0 animate-spin" />
+        <span className="text-sm font-bold">{headline}</span>
       </div>
 
       {/* Completed steps (timeline) */}
