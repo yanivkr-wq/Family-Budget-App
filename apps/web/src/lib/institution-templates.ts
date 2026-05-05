@@ -39,6 +39,10 @@ export interface InstitutionTemplate {
     notes?: number;
     balance?: number; // running balance after transaction (banks only)
     installmentInfo?: number; // some CCs have a "payments" column
+    /** Bank's own categorization label (Hebrew name like "מסעדות" / "אנרגיה").
+     *  We map these to our household categories in the import action — used
+     *  as a fallback when no user rule matches. */
+    categoryHint?: number;
   };
   amountConvention: AmountConvention;
   dateFormat: DateFormat;
@@ -253,6 +257,7 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
       merchant:        1, // שם בית עסק
       amount:          3, // סכום חיוב — always ILS, after FX conversion
       type:            4, // סוג עסקה (רגילה / הוראת קבע / שירותים / תשלומים)
+      categoryHint:    5, // ענף — bank's own category label (e.g. "מסעדות", "דלק")
       notes:           6, // הערות (sometimes carries "עסקה בקליטה" for pending)
     },
     amountConvention: 'signed',
@@ -287,7 +292,7 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     columns: {
       transactionDate:  0,  // תאריך עסקה
       merchant:         1,  // שם בית העסק
-      // col 2 = קטגוריה (the bank's own — useful as a hint, not mapped)
+      categoryHint:     2,  // קטגוריה — bank's own category label (e.g. "אוכל ומשקאות")
       // col 3 = 4 ספרות אחרונות של כרטיס האשראי (handled by upload action)
       type:             4,  // סוג עסקה (רגילה / תשלומים / חיוב עסקות מיידי / etc.)
       amount:           5,  // סכום חיוב — always ILS

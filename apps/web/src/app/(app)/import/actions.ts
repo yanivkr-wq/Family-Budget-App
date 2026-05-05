@@ -1100,6 +1100,9 @@ export interface BankExportImportResult {
   rowsParsed:        number;          // total rows the parser produced
   /** Rows that received a category from the rules engine. */
   categorizedRows:   number;
+  /** Rows that received a category from the bank's own ענף / קטגוריה column
+   *  via BANK_HINT_TO_OUR_CATEGORY (used as fallback when no user rule fires). */
+  bankHintCategorized: number;
   /** Installment plans auto-created during this import (didn't exist before). */
   newPlansCreated:   number;
   /** Rows linked to an installment plan (newly created OR pre-existing). */
@@ -1123,6 +1126,104 @@ import { addMonths } from '@fba/db';
 function hashRowId(date: string, chargeDate: string | null, amount: number, merchant: string, notes: string | null): string {
   const key = [date, chargeDate ?? '', amount.toFixed(2), merchant.trim(), (notes ?? '').trim()].join('|');
   return createHash('sha1').update(key).digest('hex').slice(0, 24);
+}
+
+/**
+ * Map the bank's own ענף / קטגוריה Hebrew label → a list of candidate
+ * Hebrew names we look for in the household's categories. The first match
+ * wins. Strings are matched as case-insensitive normalized substrings, so
+ * "מסעדות וקפה" in the bank file will match either of "מסעדות" or "מסעדות"
+ * household entries.
+ *
+ * Why a substring map and not exact match: bank labels vary subtly between
+ * exports ("דלק" vs "דלק ורכב" vs "תחנות דלק") and we want one rule that
+ * covers all of them. The TARGET names are the SAME ones the user is most
+ * likely to have created (Hebrew app, Hebrew defaults).
+ *
+ * Order matters within an array — earliest target wins if multiple exist.
+ */
+const BANK_HINT_TO_OUR_CATEGORY: Array<{ pattern: RegExp; targets: string[] }> = [
+  // Food & dining
+  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות/i,
+    targets: ['מסעדות', 'אוכל בחוץ', 'מסעדות וקפה', 'אוכל'] },
+  // Groceries / supermarkets
+  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן/i,
+    targets: ['סופר', 'מזון', 'קניות מזון', 'סופרמרקט', 'מצרכים'] },
+  // Fuel / car
+  { pattern: /דלק|תדלוק|בנזין/i,
+    targets: ['דלק', 'רכב', 'תחבורה'] },
+  // Car / vehicle (non-fuel)
+  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6/i,
+    targets: ['רכב', 'תחבורה', 'הוצאות רכב'] },
+  // Public transport
+  { pattern: /תחבורה|רכבת|אוטובוס|רב\s*קו|מונית/i,
+    targets: ['תחבורה', 'תחבורה ציבורית'] },
+  // Utilities / household bills
+  { pattern: /חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר/i,
+    targets: ['חשבונות', 'שירותים', 'בית', 'דיור'] },
+  // Communications
+  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה/i,
+    targets: ['תקשורת', 'תקשורת וטלוויזיה'] },
+  // Insurance
+  { pattern: /ביטוח/i,
+    targets: ['ביטוח', 'ביטוחים'] },
+  // Health / pharmacy
+  { pattern: /בריאות|רפואה|רוקחות|בית\s*מרקחת|פארם|רופא|קופ.?ח/i,
+    targets: ['בריאות', 'רפואה'] },
+  // Clothing / fashion
+  { pattern: /ביגוד|אופנה|בגדים|הנעלה|נעליים/i,
+    targets: ['ביגוד', 'ביגוד והנעלה', 'אופנה'] },
+  // Beauty / personal
+  { pattern: /יופי|טיפוח|קוסמטיקה|מספרה|ספא/i,
+    targets: ['טיפוח', 'יופי', 'אישי'] },
+  // Entertainment / leisure
+  { pattern: /בידור|פנאי|תרבות|קולנוע|תיאטרון|הופעה|מנוי|סטרימינג|נטפליקס|ספוטיפיי/i,
+    targets: ['בילוי', 'בידור', 'פנאי', 'בילויים'] },
+  // Travel / vacation
+  { pattern: /חופשה|נסיעות|תיירות|טיסות|מלון|חו["'״]?ל/i,
+    targets: ['טיולים', 'חופשות', 'נסיעות', 'נופש'] },
+  // Education
+  { pattern: /חינוך|לימודים|בית\s*ספר|גן\s*ילדים|חוגים|ספרים/i,
+    targets: ['חינוך', 'ילדים', 'לימודים'] },
+  // Kids
+  { pattern: /ילדים|תינוק|צעצועים/i,
+    targets: ['ילדים', 'משפחה'] },
+  // Home / furniture / improvement
+  { pattern: /בית|ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים/i,
+    targets: ['בית', 'דיור', 'ריהוט'] },
+  // Electronics / tech
+  { pattern: /אלקטרוניקה|מחשבים|טכנולוגיה|מוצרי\s*חשמל/i,
+    targets: ['אלקטרוניקה', 'טכנולוגיה', 'בית'] },
+  // Charity
+  { pattern: /צדקה|תרומה|תרומות/i,
+    targets: ['צדקה', 'תרומות'] },
+  // Pets
+  { pattern: /חיות\s*מחמד|וטרינר|כלב|חתול/i,
+    targets: ['חיות מחמד', 'בעלי חיים'] },
+  // ATM / cash withdrawals — leave uncategorized; caller can rule it
+  // Income hints — usually not in CC files but harmless
+  { pattern: /משכורת|שכר|הכנסה/i,
+    targets: ['הכנסות', 'משכורת'] },
+];
+
+/** Try to match a bank's hint string ("מסעדות וקפה") against the household's
+ *  category list. Returns the first matching category id (top-level only),
+ *  or null if no pattern fires or no household category exists for the
+ *  matched targets. */
+function matchBankHintToCategoryId(
+  hint: string,
+  topCategoryByName: Map<string, string>,
+): string | null {
+  const trimmed = hint.trim();
+  if (!trimmed) return null;
+  for (const entry of BANK_HINT_TO_OUR_CATEGORY) {
+    if (!entry.pattern.test(trimmed)) continue;
+    for (const target of entry.targets) {
+      const id = topCategoryByName.get(target.toLowerCase().trim());
+      if (id) return id;
+    }
+  }
+  return null;
 }
 
 /** Pull distinct card-last-4 values from a Discount-Key-style workbook. We
@@ -1157,7 +1258,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   const empty = (msg: string, extra: Partial<BankExportImportResult> = {}): BankExportImportResult => ({
     ok: false, templateUsed: null, inserted: 0, duplicates: 0, upgradedDuplicates: 0,
     pendingSkipped: 0, forexRows: 0, installmentRows: 0, rowsParsed: 0,
-    categorizedRows: 0, newPlansCreated: 0, rowsLinkedToPlans: 0,
+    categorizedRows: 0, bankHintCategorized: 0, newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
 
@@ -1206,7 +1307,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   // ── Load household-level data needed by both the categorizer and the
   // installment auto-detector. Both run BEFORE any insert so we set the
   // right fields on the rows the first time. ─────────────────────────────────
-  const [allRules, existingPlans] = await Promise.all([
+  const [allRules, existingPlans, allCategories] = await Promise.all([
     db.select().from(schema.categoryRules).where(and(
       eq(schema.categoryRules.householdId, ctx.householdId),
       eq(schema.categoryRules.isActive, true),
@@ -1222,7 +1323,22 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       eq(schema.installmentPlans.householdId, ctx.householdId),
       eq(schema.installmentPlans.status, 'active'),
     )),
+    db.select({
+      id:       schema.categories.id,
+      nameHe:   schema.categories.nameHe,
+      parentId: schema.categories.parentId,
+    }).from(schema.categories).where(and(
+      eq(schema.categories.householdId, ctx.householdId),
+      isNull(schema.categories.parentId),
+    )),
   ]);
+
+  // Top-level categories only — bank hints are coarse and should land on
+  // the parent. The user can split into a sub-category later via the rule
+  // editor.
+  const topCategoryByName = new Map<string, string>(
+    allCategories.map((c) => [c.nameHe.toLowerCase().trim(), c.id]),
+  );
 
   // Plan fingerprint = (merchantNormalized, paymentAmount-cents, totalPayments,
   // accountId). Cents-precision avoids float comparison issues. accountId is
@@ -1306,6 +1422,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   // ── Pass 3: build the final transaction inserts. Apply categorization
   // rules + attach installment_plan_id when applicable. ────────────────────
   let categorizedRows = 0;
+  let bankHintCategorized = 0;
   let rowsLinkedToPlans = 0;
   const inserts = rowMetas.map(({ tx, merchantNorm, billingMonth, installment }) => {
     const ruleResult = applyRules(allRules, {
@@ -1316,6 +1433,16 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       notes:              tx.notes,
     });
     if (ruleResult) categorizedRows++;
+
+    // Bank-hint fallback: only fires when the user's rules didn't match AND
+    // the parser extracted a categoryHint AND we can map that hint to a
+    // household top-level category. Lower precedence than user rules so the
+    // user can always override via the rule editor.
+    let bankHintCategoryId: string | null = null;
+    if (!ruleResult && tx.categoryHint) {
+      bankHintCategoryId = matchBankHintToCategoryId(tx.categoryHint, topCategoryByName);
+      if (bankHintCategoryId) bankHintCategorized++;
+    }
 
     const planId = installment ? planMap.get(installment.fingerprint) ?? null : null;
     if (planId) rowsLinkedToPlans++;
@@ -1340,6 +1467,13 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         categoryId:    ruleResult.categoryId,
         subCategoryId: ruleResult.subCategoryId,
         appliedRuleId: ruleResult.rule.id,
+        categorySource: 'rule' as const,
+      } : bankHintCategoryId ? {
+        categoryId:     bankHintCategoryId,
+        // categorySource = 'rule' is reused because the source enum is
+        // ['rule', 'llm', 'manual'] and bank hints are deterministic like
+        // rules. appliedRuleId stays NULL so a user can later distinguish
+        // bank-hint matches from real-rule matches in the UI.
         categorySource: 'rule' as const,
       } : {}),
       externalId: hashRowId(tx.transactionDate, tx.chargeDate, tx.amountIls, tx.merchantRaw, tx.notes),
@@ -1409,6 +1543,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         duplicates,
         upgradedDuplicates,
         categorizedRows,
+        bankHintCategorized,
         newPlansCreated,
         rowsLinkedToPlans,
         forexRows: parsed.transactions.filter((t) => t.isForex).length,
@@ -1433,6 +1568,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       installmentRows: inserts.filter((i) => i.isInstallment).length,
       rowsParsed: parsed.transactions.length,
       categorizedRows,
+      bankHintCategorized,
       newPlansCreated,
       rowsLinkedToPlans,
       errors: parsed.errors,

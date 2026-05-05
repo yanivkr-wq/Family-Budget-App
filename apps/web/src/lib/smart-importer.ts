@@ -33,6 +33,10 @@ export interface SmartTransaction {
   isForex: boolean;
   /** Sheet of origin (for multi-sheet exports like Discount Key). */
   sheetName?: string;
+  /** Bank's own categorization label, e.g. "מסעדות", "דלק", "אוכל ומשקאות".
+   *  Extracted from the template's `categoryHint` column. Used as a fallback
+   *  category signal in the import action when no user rule matches. */
+  categoryHint: string | null;
   /** Source row index for diagnostics */
   sourceRow: number;
 }
@@ -347,6 +351,10 @@ export async function smartImport(
       if (!chargeDate && isForex) chargeDate = txnDate;
       if (!chargeDate && globalChargeDate) chargeDate = globalChargeDate;
 
+      const categoryHint = cols.categoryHint !== undefined
+        ? String(row[cols.categoryHint] ?? '').trim() || null
+        : null;
+
       transactions.push({
         transactionDate: txnDate,
         chargeDate,
@@ -361,6 +369,7 @@ export async function smartImport(
             : null,
         isForex,
         sheetName: sheet.sheetName,
+        categoryHint,
         sourceRow: i + 1,
       });
     }

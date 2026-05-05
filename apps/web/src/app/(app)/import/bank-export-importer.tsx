@@ -14,7 +14,7 @@
  */
 
 import { useState, useTransition } from 'react';
-import { Loader2, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, CreditCard, Globe2, Repeat, Sparkles, Tag } from 'lucide-react';
+import { Loader2, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, CreditCard, Globe2, Repeat, Sparkles, Tag, Landmark } from 'lucide-react';
 import { importBankExport, type BankExportImportResult } from './actions';
 
 interface AccountOption {
@@ -164,10 +164,13 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
       </div>
 
       {/* Counts — automation row */}
-      {(result.categorizedRows > 0 || result.newPlansCreated > 0 || result.rowsLinkedToPlans > 0 || result.forexRows > 0) && (
+      {(result.categorizedRows > 0 || result.bankHintCategorized > 0 || result.newPlansCreated > 0 || result.rowsLinkedToPlans > 0 || result.forexRows > 0) && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {result.categorizedRows > 0 && (
-            <Stat icon={<Tag className="size-3.5 text-primary" />} label="קטגוריה הוחלה" value={result.categorizedRows} />
+            <Stat icon={<Tag className="size-3.5 text-primary" />} label="קטגוריה (חוקים)" value={result.categorizedRows} />
+          )}
+          {result.bankHintCategorized > 0 && (
+            <Stat icon={<Landmark className="size-3.5 text-accent" />} label="קטגוריה (ענף בנק)" value={result.bankHintCategorized} />
           )}
           {result.newPlansCreated > 0 && (
             <Stat icon={<CreditCard className="size-3.5 text-accent" />} label="תוכניות תשלומים נוצרו" value={result.newPlansCreated} />
