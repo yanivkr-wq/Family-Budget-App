@@ -5,7 +5,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { he } from '@fba/shared';
 import { cn } from '@/lib/utils';
-import { MessageCircle, Send, X, Loader2 } from 'lucide-react';
+import { MessageCircle, Send, X } from 'lucide-react';
+import { ChatThinkingIndicator } from '@/components/chat-thinking-indicator';
 
 interface AssistantMessage {
   role: 'user' | 'assistant';
@@ -262,18 +263,16 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
                     : 'me-auto max-w-[95%] bg-muted',
               )}
             >
-              {m.toolCalls?.map((c, j) => (
-                <div key={j} className="mb-2 flex items-center gap-2 rounded-md border bg-background/50 px-2 py-1 text-xs text-muted-foreground">
-                  {c.status === 'running' && <Loader2 className="size-3 animate-spin" />}
-                  <span className="font-mono">{c.name}</span>
-                  {c.durationMs !== undefined && (
-                    <span className="ms-auto tabular-nums">{c.durationMs}ms</span>
-                  )}
-                </div>
-              ))}
-              <div className="leading-relaxed">
-                {m.text ? (
-                  m.role === 'assistant' && !m.error ? (
+              {/* While the assistant is still working (no text yet), show a
+                  rich progress card with the active tool, completed steps,
+                  and a rotating encouragement line. Once text arrives, we
+                  hide the progress card and just render the reply. */}
+              {m.role === 'assistant' && !m.text && !m.error && (
+                <ChatThinkingIndicator toolCalls={m.toolCalls ?? []} />
+              )}
+              {m.text && (
+                <div className="leading-relaxed">
+                  {m.role === 'assistant' && !m.error ? (
                     // Render Markdown for assistant replies. Claude leans on
                     // tables, headings, and lists; remark-gfm adds GFM table
                     // support. Custom component map keeps things on-brand and
@@ -283,16 +282,9 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
                     // User bubbles + error bubbles render as plain text — no
                     // need to parse Markdown there.
                     <div className="whitespace-pre-wrap">{m.text}</div>
-                  )
-                ) : (
-                  m.role === 'assistant' && (
-                    <span className="inline-flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="size-3 animate-spin" />
-                      {he.chat.thinking}
-                    </span>
-                  )
-                )}
-              </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
