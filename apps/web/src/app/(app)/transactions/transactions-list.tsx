@@ -156,29 +156,14 @@ export function TransactionsList(props: {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex-1 min-w-0">
-          <TransactionsFilter
-            filter={filter}
-            categories={props.categories}
-            accounts={props.accounts}
-            totalCount={props.transactions.length}
-            filteredCount={visible.length}
-            onChange={setFilter}
-          />
-        </div>
-        {/* Customize columns — opens a modal with show/hide toggles + drag
-            handles for reordering. State persists per-browser via localStorage. */}
-        <button
-          type="button"
-          onClick={() => setColumnsOpen(true)}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border bg-card px-3 py-2 text-xs font-medium text-foreground/80 hover:bg-accent/40"
-          title="הסתר/הצג עמודות וסדר אותן מחדש"
-        >
-          <Settings2 className="size-3.5" />
-          עמודות
-        </button>
-      </div>
+      <TransactionsFilter
+        filter={filter}
+        categories={props.categories}
+        accounts={props.accounts}
+        totalCount={props.transactions.length}
+        filteredCount={visible.length}
+        onChange={setFilter}
+      />
 
       {props.transactions.length === 0 && (
         <section className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -225,7 +210,22 @@ export function TransactionsList(props: {
                 {visibleColumns.map((col) => (
                   <th key={col.id} className={col.headClass}>{col.label}</th>
                 ))}
-                <th className="border-b px-3 py-2 font-medium"></th>
+                {/* Action column header — also hosts the "עמודות" button so
+                    the customizer is always reachable from the table chrome
+                    itself, not from a separate toolbar above. */}
+                <th className="border-b px-3 py-2">
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setColumnsOpen(true)}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+                      title="הסתר/הצג עמודות וסדר אותן מחדש"
+                    >
+                      <Settings2 className="size-3.5" />
+                      עמודות
+                    </button>
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody>

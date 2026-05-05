@@ -129,7 +129,11 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
     renderCell: ({ t, isInstallment }) => (
-      <div className="flex flex-wrap items-center gap-1.5">
+      // Stacked layout to mirror the category column (cat on top, sub-cat
+      // below): merchant on top, installment pill below — both anchored to
+      // the right (start in RTL) so they line up consistently regardless
+      // of merchant text length.
+      <div className="flex flex-col items-start gap-0.5">
         <span>{t.merchant}</span>
         {isInstallment && (
           <Link
