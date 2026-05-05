@@ -642,7 +642,7 @@ export default async function DashboardPage(props: {
               <CategoryDonut data={donutData} centerValue={spent} centerLabel="הוצא" />
               <div className="mt-3 flex items-center gap-2 rounded-md border bg-accent-soft/50 p-2.5 text-xs text-accent">
                 <MessageCircle className="size-3.5 shrink-0" />
-                <span>שאל את העוזר ⌘K לתובנות מעמיקות</span>
+                <span>שאל את העוזר בעברית — לדוגמה: &ldquo;איפה אפשר לחסוך?&rdquo; (⌘K)</span>
               </div>
             </section>
 
