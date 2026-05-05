@@ -55,11 +55,11 @@ export const VIEW_OPTIONS: ViewOption[] = [
     label:    'משולב',
     icon:     Users,
     helpText: 'הכל ביחד, ללא ספירה כפולה של העברות',
-    // Orange (not amber) — amber-* clashes with the app's warning color
-    // (used by Insights alerts for near-budget / MoM-spike). Orange-500 is
-    // distinctly red-orange so users won't read "combined view" as "warning".
-    activeClass: 'bg-orange-200 text-orange-900 dark:bg-orange-900/60 dark:text-orange-100',
-    stripeClass: 'bg-orange-500 dark:bg-orange-500',
+    // Rose — warm enough to clearly differ from blue/slate, but more refined
+    // than the previous orange. Doesn't conflict with the app's semantic
+    // colors (success green / warning amber / destructive red).
+    activeClass: 'bg-rose-200 text-rose-900 dark:bg-rose-900/60 dark:text-rose-100',
+    stripeClass: 'bg-rose-500 dark:bg-rose-500',
   },
 ];
 
