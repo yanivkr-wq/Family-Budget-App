@@ -1,0 +1,195 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Family Budget App — Design Tokens
+   Banking-app calm palette: deep navy primary, teal accents, forest income,
+   controlled red for warnings/over-budget. Mobile-first density.
+   ============================================================================ */
+
+@layer base {
+  :root {
+    /* Surfaces */
+    --background: 210 33% 99%;        /* near-white with a hint of cool blue */
+    --foreground: 218 30% 12%;        /* deep ink */
+    --card: 0 0% 100%;
+    --card-foreground: 218 30% 12%;
+    --muted: 215 25% 96%;
+    --muted-foreground: 215 14% 42%;
+    --subtle: 215 25% 98%;            /* row hover, table stripe */
+
+    /* Primary — banking blue (deep, trustworthy, not flashy) */
+    --primary: 215 65% 30%;
+    --primary-foreground: 210 40% 98%;
+    --primary-soft: 215 50% 92%;      /* tinted backgrounds */
+
+    /* Accent — teal (drawer, callouts, links) */
+    --accent: 175 55% 35%;
+    --accent-foreground: 210 40% 98%;
+    --accent-soft: 175 45% 92%;
+
+    /* Semantic */
+    --success: 145 50% 30%;           /* income, on-budget */
+    --success-foreground: 145 60% 98%;
+    --success-soft: 145 40% 92%;
+
+    --warning: 35 80% 45%;            /* approaching budget */
+    --warning-foreground: 35 80% 12%;
+    --warning-soft: 35 80% 94%;
+
+    --destructive: 358 65% 45%;       /* over budget, errors, deletes */
+    --destructive-foreground: 0 0% 99%;
+    --destructive-soft: 358 65% 96%;
+
+    /* Borders */
+    --border: 215 22% 90%;
+    --border-strong: 215 22% 80%;
+    --input: 215 22% 88%;
+    --ring: 215 65% 50%;              /* focus ring — slightly brighter than primary */
+
+    /* Chart palette — distinct, warm-leaning so it reads on bank-blue ground */
+    --chart-1: 215 65% 35%;           /* primary blue */
+    --chart-2: 175 50% 38%;           /* teal */
+    --chart-3: 35 70% 50%;            /* amber */
+    --chart-4: 145 40% 38%;           /* forest green */
+    --chart-5: 280 35% 45%;           /* deep purple */
+    --chart-6: 358 55% 50%;           /* coral */
+    --chart-7: 195 50% 40%;           /* sky */
+
+    /* Shape */
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --background: 218 25% 9%;
+    --foreground: 210 25% 96%;
+    --card: 218 22% 12%;
+    --card-foreground: 210 25% 96%;
+    --muted: 218 18% 16%;
+    --muted-foreground: 215 14% 65%;
+    --subtle: 218 18% 14%;
+
+    --primary: 215 70% 65%;
+    --primary-foreground: 218 30% 8%;
+    --primary-soft: 215 40% 22%;
+
+    --accent: 175 55% 55%;
+    --accent-foreground: 218 30% 8%;
+    --accent-soft: 175 40% 20%;
+
+    --success: 145 50% 55%;
+    --success-foreground: 145 30% 10%;
+    --success-soft: 145 35% 18%;
+
+    --warning: 35 80% 60%;
+    --warning-foreground: 35 30% 10%;
+    --warning-soft: 35 50% 18%;
+
+    --destructive: 358 65% 60%;
+    --destructive-foreground: 0 0% 99%;
+    --destructive-soft: 358 40% 20%;
+
+    --border: 218 18% 22%;
+    --border-strong: 218 18% 32%;
+    --input: 218 18% 22%;
+    --ring: 215 70% 60%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1, 'kern' 1, 'ss01' 1;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Tabular numbers everywhere by default — finance app */
+  table, .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Subtle focus rings, not the default browser blue */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* RTL: lucide chevrons mirrored */
+  [dir='rtl'] .rtl-flip {
+    transform: scaleX(-1);
+  }
+
+  /* Hide scrollbars on mobile but keep scrolling */
+  @media (max-width: 768px) {
+    .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+    }
+    .scrollbar-hide {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  }
+}
+
+@layer components {
+  /* Tile — primary surface for dashboard KPIs */
+  .tile {
+    @apply rounded-xl border bg-card p-4 transition-shadow hover:shadow-sm;
+  }
+
+  /* Tile heading number — large hero number */
+  .tile-value {
+    @apply mt-1 text-3xl font-semibold tracking-tight tabular-nums;
+  }
+
+  /* Pill */
+  .pill {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  /* Form field cluster */
+  .form-label {
+    @apply text-xs font-medium text-muted-foreground;
+  }
+  .form-input {
+    @apply w-full rounded-md border bg-background px-3 py-2 text-sm shadow-sm transition-colors focus:border-ring focus:shadow-md;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
+    min-height: 2.5rem; /* 40px — comfortable tap target */
+  }
+  .btn-primary {
+    @apply btn bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/95;
+  }
+  .btn-secondary {
+    @apply btn border bg-card hover:bg-muted active:bg-muted/80;
+  }
+  .btn-ghost {
+    @apply btn hover:bg-muted active:bg-muted/80;
+  }
+  .btn-destructive {
+    @apply btn text-destructive hover:bg-destructive/10 active:bg-destructive/15;
+  }
+}
+
+/* Recharts overrides to match the palette */
+.recharts-text {
+  fill: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+.recharts-cartesian-grid line {
+  stroke: hsl(var(--border));
+}
+.recharts-tooltip-wrapper {
+  outline: none;
+}

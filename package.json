@@ -1,0 +1,34 @@
+{
+  "name": "family-budget-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted Hebrew family budget app — replaces an Excel ledger with auto bank/CC ingestion, smart categorization, installment projection, anomaly detection, and a Claude-powered chat assistant.",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "predev": "node scripts/sync-env.mjs",
+    "dev": "pnpm -r --parallel dev",
+    "sync-env": "node scripts/sync-env.mjs",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @fba/db generate",
+    "db:migrate": "pnpm --filter @fba/db migrate",
+    "db:seed": "pnpm --filter @fba/db seed",
+    "create-admin": "pnpm --filter @fba/db create-admin",
+    "reset-password": "pnpm --filter @fba/db reset-password --",
+    "web:dev": "pnpm --filter @fba/web dev",
+    "worker:dev": "pnpm --filter @fba/worker dev",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yaml,yml}\" --ignore-path .gitignore"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

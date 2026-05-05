@@ -1,0 +1,117 @@
+# Family Budget App — production stack
+# Single Hetzner CX32 VPS runs all four services on a private docker network.
+# Caddy is the only thing exposed to the internet (80/443).
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    networks:
+      - app
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    networks:
+      - app
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.worker
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      HOST: 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Puppeteer needs more shm than the default 64MB
+    shm_size: 1gb
+    networks:
+      - app
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: budget
+      POSTGRES_USER: budget
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=he_IL.UTF-8 --lc-ctype=he_IL.UTF-8 --locale-provider=icu --icu-locale=he-IL"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U budget -d budget"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app
+    # Postgres is NOT exposed to the host — only internal docker network.
+
+  backup:
+    image: alpine:3.20
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
+      - backup_state:/state
+    secrets:
+      - postgres_password
+      - gpg_pubkey
+    entrypoint: ["sh", "-c"]
+    # Run a tiny scheduler. crond fires backup.sh nightly.
+    command: |
+      apk add --no-cache postgresql-client gnupg curl tzdata bash &&
+      cp /usr/share/zoneinfo/Asia/Jerusalem /etc/localtime &&
+      gpg --import /run/secrets/gpg_pubkey &&
+      echo "0 3 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root &&
+      crond -f -l 8
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app
+
+networks:
+  app:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pg_data:
+  backup_state:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  gpg_pubkey:
+    file: ./secrets/gpg_pubkey.asc

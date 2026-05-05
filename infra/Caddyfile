@@ -1,0 +1,36 @@
+# Family Budget App — Caddy reverse proxy
+# Replace `budget.example.com` with your domain.
+
+{
+    email you@example.com
+}
+
+budget.example.com {
+    encode zstd gzip
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' https://fonts.gstatic.com data:"
+        -Server
+    }
+
+    # The worker is internal-only. Do not expose /chat, /scrape, etc. directly.
+    handle /worker/* {
+        respond 404
+    }
+
+    reverse_proxy web:3000 {
+        # SSE keepalive for the chat endpoint
+        flush_interval -1
+    }
+}
+
+# Redirect any other host to the canonical one (defends against host-header spoofing).
+:80 {
+    redir https://budget.example.com{uri}
+}
