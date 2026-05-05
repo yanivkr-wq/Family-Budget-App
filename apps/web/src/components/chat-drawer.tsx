@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { he } from '@fba/shared';
@@ -38,7 +38,6 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
   // Top-level "is the assistant currently working?" flag. Drives the banner
   // shown above the message list (separate from per-message thinking
   // indicators, so we always have a guaranteed-visible affordance even if
@@ -285,7 +284,7 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
-                    onClick={() => startTransition(() => send(s))}
+                    onClick={() => { void send(s); }}
                     className="rounded-full border px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     {s}
@@ -333,7 +332,7 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            startTransition(() => send(input));
+            void send(input);
           }}
           className="border-t p-3"
         >
@@ -343,11 +342,11 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
               onChange={(e) => setInput(e.target.value)}
               placeholder={he.chat.placeholder}
               className="flex-1 rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              disabled={isPending}
+              disabled={isStreaming}
             />
             <button
               type="submit"
-              disabled={isPending || !input.trim()}
+              disabled={isStreaming || !input.trim()}
               className="inline-flex items-center justify-center rounded-md bg-primary px-3 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               <Send className="size-4" />
