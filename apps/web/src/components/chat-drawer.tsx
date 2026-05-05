@@ -39,6 +39,12 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
   const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Top-level "is the assistant currently working?" flag. Drives the banner
+  // shown above the message list (separate from per-message thinking
+  // indicators, so we always have a guaranteed-visible affordance even if
+  // per-message conditionals drift).
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [activeToolCalls, setActiveToolCalls] = useState<Array<{ name: string; status: 'running' | 'done' | 'error'; durationMs?: number }>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Cmd/Ctrl + K toggles the drawer. Also listens for a custom `fba:open-chat`
@@ -69,6 +75,8 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
 
   async function send(text: string) {
     if (!text.trim()) return;
+    setIsStreaming(true);
+    setActiveToolCalls([]);
     setMessages((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '', toolCalls: [] }]);
     setInput('');
 
@@ -86,16 +94,18 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         }),
       });
     } catch (err) {
+      setIsStreaming(false);
       setMessages((prev) => {
         const copy = [...prev];
         const errMsg = err instanceof Error ? err.message : he.chat.error;
-        copy[copy.length - 1] = { role: 'assistant', text: errMsg, error: errMsg };
+        copy[copy.length - 1] = { role: 'assistant', text: errMsg, error: errMsg, done: true };
         return copy;
       });
       return;
     }
 
     if (!res.ok || !res.body) {
+      setIsStreaming(false);
       const fallback = await res.text().catch(() => he.chat.error);
       setMessages((prev) => {
         const copy = [...prev];
@@ -103,6 +113,7 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
           role: 'assistant',
           text: fallback || he.chat.error,
           error: fallback || he.chat.error,
+          done: true,
         };
         return copy;
       });
@@ -132,9 +143,10 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
       }
     }
 
-    // Stream is fully done — mark the message so the thinking indicator can
-    // disappear. If the bubble is still empty (no text, no error), surface
-    // a fallback message so the user doesn't stare at "thinking..." forever.
+    // Stream is fully done — flip the banner off, mark the message, and if the
+    // bubble is still empty (no text, no error), surface a fallback so the
+    // user doesn't stare at "thinking..." forever.
+    setIsStreaming(false);
     setMessages((prev) => {
       const copy = [...prev];
       const last = copy[copy.length - 1];
@@ -165,6 +177,7 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         return copy;
       });
     } else if (data.kind === 'tool_call_start') {
+      setActiveToolCalls((prev) => [...prev, { name: data.name as string, status: 'running' }]);
       setMessages((prev) => {
         const copy = [...prev];
         const last = copy[copy.length - 1];
@@ -177,6 +190,17 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         return copy;
       });
     } else if (data.kind === 'tool_call_result') {
+      setActiveToolCalls((prev) => {
+        const copy = [...prev];
+        const idx = copy.findIndex((c) => c.name === data.name && c.status === 'running');
+        if (idx >= 0)
+          copy[idx] = {
+            ...copy[idx]!,
+            status: data.error ? 'error' : 'done',
+            durationMs: data.durationMs as number,
+          };
+        return copy;
+      });
       setMessages((prev) => {
         const copy = [...prev];
         const last = copy[copy.length - 1];
@@ -241,6 +265,18 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
           </button>
         </header>
 
+        {/* Top-of-drawer banner — appears whenever the assistant is working
+            on a turn. Lives outside the scrolling message list so it's always
+            visible regardless of scroll position. */}
+        {isStreaming && (
+          <div className="border-b bg-muted/30 px-4 py-3">
+            <ChatThinkingIndicator
+              toolCalls={activeToolCalls}
+              hasText={messages[messages.length - 1]?.text ? true : false}
+            />
+          </div>
+        )}
+
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
           {messages.length === 0 && (
             <div className="space-y-2">
@@ -271,16 +307,10 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
                     : 'me-auto max-w-[95%] bg-muted',
               )}
             >
-              {/* Thinking indicator stays visible the whole time the
-                  assistant is working — from the moment the user clicks
-                  until the stream closes (m.done = true). Even after text
-                  starts arriving, we leave the indicator above the partial
-                  reply so the user always has a "still working" affordance. */}
-              {m.role === 'assistant' && !m.error && !m.done && (
-                <div className={cn(m.text && 'mb-2')}>
-                  <ChatThinkingIndicator toolCalls={m.toolCalls ?? []} hasText={!!m.text} />
-                </div>
-              )}
+              {/* Thinking indicator lives in the top banner now (see
+                  isStreaming render above the message list). No per-bubble
+                  duplicate — the empty assistant bubble simply shows the
+                  bubble outline; the streamed text fills it as it arrives. */}
               {m.text && (
                 <div className="leading-relaxed">
                   {m.role === 'assistant' && !m.error ? (
