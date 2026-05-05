@@ -608,8 +608,15 @@ export default async function DashboardPage(props: {
       {/* ── AI Insights widget ── */}
       <InsightsWidget insights={insights} month={month} />
 
-      {/* ── Recurring expenses overview — sits between Insights and Savings.
-          Hides itself when there are no active recurring patterns yet. ── */}
+      {/* ── Side-by-side row: Recurring overview + Savings snapshot ──
+          Both are "monthly informational" widgets with similar visual
+          weight — pairing them on wide screens keeps the dashboard
+          dense without losing readability. Stacks vertically on
+          smaller screens. The wrapper renders only when at least one
+          of the two has data; each child still has its own self-hide
+          for when it's empty. ── */}
+      {(activeRecurringPatterns.length > 0 || activeGoals.length > 0) && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {activeRecurringPatterns.length > 0 && (
         <section className="tile space-y-4" dir="rtl">
           {/* Header */}
@@ -707,7 +714,7 @@ export default async function DashboardPage(props: {
         </section>
       )}
 
-      {/* ── Savings snapshot ── */}
+      {/* ── Savings snapshot — paired side-by-side with Recurring above. ── */}
       {activeGoals.length > 0 && (
         <section className="tile space-y-4">
           {/* header */}
@@ -778,6 +785,8 @@ export default async function DashboardPage(props: {
             </div>
           )}
         </section>
+      )}
+        </div>
       )}
 
       {!hasData ? (
