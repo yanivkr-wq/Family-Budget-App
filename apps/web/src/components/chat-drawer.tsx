@@ -62,25 +62,46 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
 
   async function send(text: string) {
     if (!text.trim()) return;
+    console.log('[chat] send →', text);
     setMessages((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '', toolCalls: [] }]);
     setInput('');
 
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        householdId,
-        userId,
-        userDisplayName,
-        sessionId,
-        message: text,
-      }),
-    });
-
-    if (!res.ok || !res.body) {
+    let res: Response;
+    try {
+      res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          householdId,
+          userId,
+          userDisplayName,
+          sessionId,
+          message: text,
+        }),
+      });
+    } catch (err) {
+      console.error('[chat] fetch failed', err);
       setMessages((prev) => {
         const copy = [...prev];
-        copy[copy.length - 1] = { role: 'assistant', text: he.chat.error };
+        const errMsg = err instanceof Error ? err.message : he.chat.error;
+        copy[copy.length - 1] = { role: 'assistant', text: errMsg, error: errMsg };
+        return copy;
+      });
+      return;
+    }
+
+    console.log('[chat] response status', res.status, 'has body:', !!res.body);
+
+    if (!res.ok || !res.body) {
+      const fallback = await res.text().catch(() => he.chat.error);
+      console.error('[chat] non-ok response', fallback);
+      setMessages((prev) => {
+        const copy = [...prev];
+        copy[copy.length - 1] = {
+          role: 'assistant',
+          text: fallback || he.chat.error,
+          error: fallback || he.chat.error,
+        };
         return copy;
       });
       return;
@@ -89,6 +110,8 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let eventCount = 0;
+    let textDeltaCount = 0;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -102,12 +125,30 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         const json = line.replace(/^data:\s*/, '');
         try {
           const data = JSON.parse(json);
+          eventCount++;
+          if (data.kind === 'text_delta') textDeltaCount++;
+          console.log('[chat] event', data.kind, data);
           handleEvent(data);
-        } catch {
-          // ignore malformed line
+        } catch (parseErr) {
+          console.warn('[chat] parse error on line', json, parseErr);
         }
       }
     }
+
+    console.log(`[chat] stream ended. ${eventCount} events, ${textDeltaCount} text_delta`);
+
+    // If the stream finished but the assistant bubble is still empty, surface
+    // a fallback message so the user doesn't stare at "thinking..." forever.
+    setMessages((prev) => {
+      const copy = [...prev];
+      const last = copy[copy.length - 1];
+      if (last && last.role === 'assistant' && !last.text && !last.error) {
+        const fallback =
+          'העוזר סיים את הפעולה ללא טקסט תשובה. אם זה ממשיך לקרות, פתח את DevTools ובדוק את הקונסול.';
+        copy[copy.length - 1] = { ...last, text: fallback, error: fallback };
+      }
+      return copy;
+    });
   }
 
   function handleEvent(data: { kind: string; [k: string]: unknown }) {
