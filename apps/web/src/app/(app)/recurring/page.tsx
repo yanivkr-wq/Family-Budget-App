@@ -20,6 +20,7 @@ export default async function RecurringPage() {
       .select({
         id:                 schema.recurringPatterns.id,
         merchantNormalized: schema.recurringPatterns.merchantNormalized,
+        description:        schema.recurringPatterns.description,
         categoryId:         schema.recurringPatterns.categoryId,
         expectedAmountIls:  schema.recurringPatterns.expectedAmountIls,
         frequency:          schema.recurringPatterns.frequency,

@@ -28,6 +28,9 @@ interface RuleFormInput {
   recurringExpectedAmount?: number | null;
   recurringFrequency?: 'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
   recurringSign?: 'expense' | 'income';
+  /** Human-readable label for the recurring expense (e.g., "Spotify Family",
+   *  "השכרת דירה"). Stored alongside the merchant on /recurring. */
+  recurringDescription?: string | null;
 }
 
 function parseForm(formData: FormData): RuleFormInput {
@@ -57,6 +60,7 @@ function parseForm(formData: FormData): RuleFormInput {
     recurringExpectedAmount: numOrNull(formData.get('recurringExpectedAmount')),
     recurringFrequency: (formData.get('recurringFrequency') as RuleFormInput['recurringFrequency']) || 'monthly',
     recurringSign: (formData.get('recurringSign') as RuleFormInput['recurringSign']) || 'expense',
+    recurringDescription: ((formData.get('recurringDescription') as string | null) ?? '').trim() || null,
   };
 }
 
@@ -87,6 +91,7 @@ async function createRecurringFromRule(
     expectedAmount: number | null;
     frequency: 'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
     sign: 'expense' | 'income';
+    description: string | null;
   },
 ): Promise<number> {
   const amount = Math.max(Number(recurring.expectedAmount ?? 0), 0);
@@ -136,6 +141,7 @@ async function createRecurringFromRule(
     const result = await db.insert(schema.recurringPatterns).values({
       householdId,
       merchantNormalized: merchant,
+      ...(recurring.description ? { description: recurring.description } : {}),
       categoryId:         rule.categoryId,
       expectedAmountIls:  String(signedAmount),
       medianAmountIls:    String(signedAmount),
@@ -308,6 +314,7 @@ export async function createRule(formData: FormData): Promise<{ ok: boolean; rul
         expectedAmount: r.recurringExpectedAmount ?? 0,
         frequency: r.recurringFrequency ?? 'monthly',
         sign: r.recurringSign ?? 'expense',
+        description: r.recurringDescription ?? null,
       },
     );
     revalidatePath('/recurring');
@@ -370,6 +377,7 @@ export async function updateRule(formData: FormData): Promise<{ ok: boolean; err
         expectedAmount: r.recurringExpectedAmount ?? 0,
         frequency: r.recurringFrequency ?? 'monthly',
         sign: r.recurringSign ?? 'expense',
+        description: r.recurringDescription ?? null,
       },
     );
     revalidatePath('/recurring');

@@ -16,24 +16,26 @@ import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 
 interface ParsedForm {
-  merchant:  string;
-  categoryId: string | null;
-  amount:    number;       // unsigned magnitude
-  sign:      'expense' | 'income';
-  frequency: 'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
-  status:    'active' | 'paused' | 'ended';
-  notes:     string | null;
+  merchant:    string;
+  description: string | null; // human-readable label (e.g., "Spotify Family")
+  categoryId:  string | null;
+  amount:      number;       // unsigned magnitude
+  sign:        'expense' | 'income';
+  frequency:   'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
+  status:      'active' | 'paused' | 'ended';
+  notes:       string | null;
 }
 
 function parseForm(fd: FormData): ParsedForm {
   return {
-    merchant:   String(fd.get('merchant') ?? '').trim(),
-    categoryId: (fd.get('categoryId') as string | null) || null,
-    amount:     Number(String(fd.get('amount') ?? '').replace(/,/g, '')),
-    sign:       (fd.get('sign') as 'expense' | 'income') ?? 'expense',
-    frequency:  (fd.get('frequency') as ParsedForm['frequency']) ?? 'monthly',
-    status:     (fd.get('status') as ParsedForm['status']) ?? 'active',
-    notes:      ((fd.get('notes') as string | null) ?? '').trim() || null,
+    merchant:    String(fd.get('merchant') ?? '').trim(),
+    description: ((fd.get('description') as string | null) ?? '').trim() || null,
+    categoryId:  (fd.get('categoryId') as string | null) || null,
+    amount:      Number(String(fd.get('amount') ?? '').replace(/,/g, '')),
+    sign:        (fd.get('sign') as 'expense' | 'income') ?? 'expense',
+    frequency:   (fd.get('frequency') as ParsedForm['frequency']) ?? 'monthly',
+    status:      (fd.get('status') as ParsedForm['status']) ?? 'active',
+    notes:       ((fd.get('notes') as string | null) ?? '').trim() || null,
   };
 }
 
@@ -66,6 +68,7 @@ export async function createRecurringPattern(fd: FormData): Promise<{ ok: boolea
     await db.insert(schema.recurringPatterns).values({
       householdId,
       merchantNormalized: f.merchant,
+      ...(f.description ? { description: f.description } : {}),
       ...(f.categoryId ? { categoryId: f.categoryId } : {}),
       expectedAmountIls:  String(signed),
       medianAmountIls:    String(signed),
@@ -110,6 +113,7 @@ export async function updateRecurringPattern(fd: FormData): Promise<{ ok: boolea
       .update(schema.recurringPatterns)
       .set({
         merchantNormalized: f.merchant,
+        description:        f.description,
         categoryId:         f.categoryId,
         expectedAmountIls:  String(signed),
         medianAmountIls:    String(signed),

@@ -14,6 +14,7 @@ interface Cat { id: string; nameHe: string }
 export interface RecurringPatternRow {
   id:                 string;
   merchantNormalized: string;
+  description:        string | null;
   categoryId:         string | null;
   expectedAmountIls:  string | number;
   frequency:          'monthly' | 'bimonthly' | 'quarterly' | 'yearly' | string;
@@ -48,6 +49,7 @@ export function RecurringModal({
   const initialSign: 'expense' | 'income' = pattern && Number(pattern.expectedAmountIls) > 0 ? 'income' : 'expense';
 
   const [merchant, setMerchant] = useState(pattern?.merchantNormalized ?? '');
+  const [description, setDescription] = useState(pattern?.description ?? '');
   const [categoryId, setCategoryId] = useState(pattern?.categoryId ?? '');
   const [amountStr, setAmountStr] = useState(initialAmount > 0 ? String(initialAmount) : '');
   const [sign, setSign] = useState<'expense' | 'income'>(initialSign);
@@ -75,13 +77,14 @@ export function RecurringModal({
     setError(null);
     const fd = new FormData();
     if (isEdit) fd.set('id', pattern!.id);
-    fd.set('merchant',   merchant);
-    fd.set('categoryId', categoryId);
-    fd.set('amount',     amountStr);
-    fd.set('sign',       sign);
-    fd.set('frequency',  frequency);
-    fd.set('status',     status);
-    fd.set('notes',      notes);
+    fd.set('merchant',    merchant);
+    fd.set('description', description);
+    fd.set('categoryId',  categoryId);
+    fd.set('amount',      amountStr);
+    fd.set('sign',        sign);
+    fd.set('frequency',   frequency);
+    fd.set('status',      status);
+    fd.set('notes',       notes);
 
     startTransition(async () => {
       const res = isEdit ? await updateRecurringPattern(fd) : await createRecurringPattern(fd);
@@ -109,20 +112,40 @@ export function RecurringModal({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Merchant */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">
-              שם בית עסק / תיאור <span className="text-destructive">*</span>
-            </label>
-            <input
-              type="text"
-              value={merchant}
-              onChange={(e) => setMerchant(e.target.value)}
-              placeholder="למשל: ארנונה, פלאפון, נטפליקס"
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              required
-              autoFocus
-            />
+          {/* Merchant + description side-by-side */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                שם בית עסק <span className="text-destructive">*</span>
+              </label>
+              <input
+                type="text"
+                value={merchant}
+                onChange={(e) => setMerchant(e.target.value)}
+                placeholder="למשל: פלאפון, פייבוקס, הראל"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                required
+                autoFocus
+              />
+              <p className="text-[10px] text-muted-foreground">
+                המזהה לעדכון אוטומטי של תג &quot;קבוע&quot; בייבואים עתידיים.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                תיאור / שם התשלום
+              </label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="למשל: השכרת דירה, מנוי משפחה"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                מה נרכש בפועל — מוצג ליד שם בית העסק לזיהוי מהיר.
+              </p>
+            </div>
           </div>
 
           {/* Sign + amount */}

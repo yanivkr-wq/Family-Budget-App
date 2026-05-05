@@ -365,6 +365,7 @@ function RuleEditModal(props: {
   const [recurringExpectedAmount, setRecurringExpectedAmount] = useState('');
   const [recurringFrequency, setRecurringFrequency] = useState<'monthly' | 'bimonthly' | 'quarterly' | 'yearly'>('monthly');
   const [recurringSign, setRecurringSign] = useState<'expense' | 'income'>('expense');
+  const [recurringDescription, setRecurringDescription] = useState('');
   const [isPending, startTransition] = useTransition();
 
   const subForCategory = props.subCategories.filter((s) => s.parentId === categoryId);
@@ -390,6 +391,7 @@ function RuleEditModal(props: {
       if (recurringExpectedAmount) fd.set('recurringExpectedAmount', recurringExpectedAmount);
       fd.set('recurringFrequency', recurringFrequency);
       fd.set('recurringSign', recurringSign);
+      if (recurringDescription.trim()) fd.set('recurringDescription', recurringDescription.trim());
     }
     fd.set('priority', priority);
     fd.set('isActive', String(isActive));
@@ -583,41 +585,56 @@ function RuleEditModal(props: {
             </label>
 
             {markAsRecurring && (
-              <div className="grid grid-cols-3 gap-2 ps-6">
+              <div className="space-y-2 ps-6">
                 <div className="space-y-1">
-                  <label className="form-label">סוג</label>
-                  <select
-                    value={recurringSign}
-                    onChange={(e) => setRecurringSign(e.target.value as 'expense' | 'income')}
-                    className="form-input text-sm"
-                  >
-                    <option value="expense">הוצאה</option>
-                    <option value="income">הכנסה</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="form-label">סכום צפוי (₪)</label>
+                  <label className="form-label">תיאור / שם התשלום (רשות)</label>
                   <input
-                    type="number"
-                    inputMode="decimal"
-                    value={recurringExpectedAmount}
-                    onChange={(e) => setRecurringExpectedAmount(e.target.value)}
-                    placeholder="לדוגמה: 21.90"
+                    type="text"
+                    value={recurringDescription}
+                    onChange={(e) => setRecurringDescription(e.target.value)}
+                    placeholder="למשל: Spotify Family, השכרת דירה, ביטוח רכב"
                     className="form-input text-sm"
                   />
+                  <p className="text-[10px] text-muted-foreground">
+                    מה נרכש בפועל — מוצג ליד שם בית העסק ב-/recurring.
+                  </p>
                 </div>
-                <div className="space-y-1">
-                  <label className="form-label">תדירות</label>
-                  <select
-                    value={recurringFrequency}
-                    onChange={(e) => setRecurringFrequency(e.target.value as typeof recurringFrequency)}
-                    className="form-input text-sm"
-                  >
-                    <option value="monthly">חודשי</option>
-                    <option value="bimonthly">דו-חודשי</option>
-                    <option value="quarterly">רבעוני</option>
-                    <option value="yearly">שנתי</option>
-                  </select>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1">
+                    <label className="form-label">סוג</label>
+                    <select
+                      value={recurringSign}
+                      onChange={(e) => setRecurringSign(e.target.value as 'expense' | 'income')}
+                      className="form-input text-sm"
+                    >
+                      <option value="expense">הוצאה</option>
+                      <option value="income">הכנסה</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="form-label">סכום צפוי (₪)</label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      value={recurringExpectedAmount}
+                      onChange={(e) => setRecurringExpectedAmount(e.target.value)}
+                      placeholder="לדוגמה: 21.90"
+                      className="form-input text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="form-label">תדירות</label>
+                    <select
+                      value={recurringFrequency}
+                      onChange={(e) => setRecurringFrequency(e.target.value as typeof recurringFrequency)}
+                      className="form-input text-sm"
+                    >
+                      <option value="monthly">חודשי</option>
+                      <option value="bimonthly">דו-חודשי</option>
+                      <option value="quarterly">רבעוני</option>
+                      <option value="yearly">שנתי</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             )}

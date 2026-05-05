@@ -102,7 +102,14 @@ export function RecurringList({
                 const isPaused = p.status === 'paused';
                 return (
                   <tr key={p.id} className="border-b last:border-0 hover:bg-muted/30">
-                    <td className="px-3 py-2 font-medium">{p.merchantNormalized}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-medium">{p.merchantNormalized}</div>
+                      {p.description && (
+                        <div className="text-[11px] text-muted-foreground" title={p.description}>
+                          {p.description}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       {cat ? (
                         <span

@@ -344,6 +344,7 @@ export default async function DashboardPage(props: {
   const activeRecurringPatterns = await db
     .select({
       merchantNormalized: schema.recurringPatterns.merchantNormalized,
+      description:        schema.recurringPatterns.description,
       categoryId:         schema.recurringPatterns.categoryId,
       expectedAmountIls:  schema.recurringPatterns.expectedAmountIls,
       frequency:          schema.recurringPatterns.frequency,
@@ -365,6 +366,7 @@ export default async function DashboardPage(props: {
     const factor = FREQ_TO_MONTHLY[p.frequency] ?? 1;
     return {
       merchantNormalized: p.merchantNormalized,
+      description:        p.description,
       categoryId:         p.categoryId,
       monthly:            v * factor, // negative for expense, positive for income
       frequency:          p.frequency,
@@ -795,14 +797,21 @@ export default async function DashboardPage(props: {
                           const cat = p.categoryId ? catMap.get(p.categoryId) : null;
                           return (
                             <li key={p.merchantNormalized} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className="truncate font-medium">{p.merchantNormalized}</span>
-                                {cat && (
-                                  <span
-                                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                                    style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
-                                  >
-                                    {cat.nameHe}
+                              <div className="flex min-w-0 flex-col">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate font-medium">{p.merchantNormalized}</span>
+                                  {cat && (
+                                    <span
+                                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                      style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
+                                    >
+                                      {cat.nameHe}
+                                    </span>
+                                  )}
+                                </div>
+                                {p.description && (
+                                  <span className="truncate text-[11px] text-muted-foreground" title={p.description}>
+                                    {p.description}
                                   </span>
                                 )}
                               </div>

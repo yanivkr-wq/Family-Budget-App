@@ -299,6 +299,11 @@ export const recurringPatterns = pgTable(
       .notNull()
       .references(() => households.id, { onDelete: 'cascade' }),
     merchantNormalized: text().notNull(),
+    /** Human-readable label for what's actually being paid for. The
+     *  merchantNormalized identifies WHO is charging (used as the join key
+     *  for the קבוע badge); description identifies WHAT — e.g. merchant =
+     *  "פייבוקס", description = "השכרת דירה אורית מילוא". Optional. */
+    description: text(),
     categoryId: uuid().references(() => categories.id, { onDelete: 'set null' }),
     expectedAmountIls: numeric({ precision: 10, scale: 2 }).notNull(),
     medianAmountIls: numeric({ precision: 10, scale: 2 }).notNull(),
