@@ -13,6 +13,10 @@ interface AssistantMessage {
   text: string;
   toolCalls?: Array<{ name: string; status: 'running' | 'done' | 'error'; durationMs?: number }>;
   error?: string;
+  /** True once the SSE stream has fully closed for this assistant turn.
+   *  We use it to keep the thinking indicator visible while text is still
+   *  streaming in, so the user always sees "we're working" UI during the wait. */
+  done?: boolean;
 }
 
 interface ChatDrawerProps {
@@ -128,15 +132,19 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
       }
     }
 
-    // If the stream finished but the assistant bubble is still empty, surface
+    // Stream is fully done — mark the message so the thinking indicator can
+    // disappear. If the bubble is still empty (no text, no error), surface
     // a fallback message so the user doesn't stare at "thinking..." forever.
-    // (Belt-and-braces — agent normally emits at least one text_delta.)
     setMessages((prev) => {
       const copy = [...prev];
       const last = copy[copy.length - 1];
-      if (last && last.role === 'assistant' && !last.text && !last.error) {
-        const fallback = 'העוזר סיים את הפעולה ללא טקסט תשובה. נסה לנסח מחדש את השאלה.';
-        copy[copy.length - 1] = { ...last, text: fallback, error: fallback };
+      if (last && last.role === 'assistant') {
+        if (!last.text && !last.error) {
+          const fallback = 'העוזר סיים את הפעולה ללא טקסט תשובה. נסה לנסח מחדש את השאלה.';
+          copy[copy.length - 1] = { ...last, text: fallback, error: fallback, done: true };
+        } else {
+          copy[copy.length - 1] = { ...last, done: true };
+        }
       }
       return copy;
     });
@@ -263,12 +271,15 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
                     : 'me-auto max-w-[95%] bg-muted',
               )}
             >
-              {/* While the assistant is still working (no text yet), show a
-                  rich progress card with the active tool, completed steps,
-                  and a rotating encouragement line. Once text arrives, we
-                  hide the progress card and just render the reply. */}
-              {m.role === 'assistant' && !m.text && !m.error && (
-                <ChatThinkingIndicator toolCalls={m.toolCalls ?? []} />
+              {/* Thinking indicator stays visible the whole time the
+                  assistant is working — from the moment the user clicks
+                  until the stream closes (m.done = true). Even after text
+                  starts arriving, we leave the indicator above the partial
+                  reply so the user always has a "still working" affordance. */}
+              {m.role === 'assistant' && !m.error && !m.done && (
+                <div className={cn(m.text && 'mb-2')}>
+                  <ChatThinkingIndicator toolCalls={m.toolCalls ?? []} hasText={!!m.text} />
+                </div>
               )}
               {m.text && (
                 <div className="leading-relaxed">

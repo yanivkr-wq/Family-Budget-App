@@ -47,7 +47,16 @@ const ENCOURAGEMENTS = [
 ];
 const ENCOURAGEMENT_INTERVAL_MS = 6000;
 
-export function ChatThinkingIndicator({ toolCalls }: { toolCalls: ToolCall[] }) {
+export function ChatThinkingIndicator({
+  toolCalls,
+  hasText = false,
+}: {
+  toolCalls: ToolCall[];
+  /** When true, text has already started streaming. We shrink the indicator
+   *  to a one-liner so it doesn't dominate the bubble — the user can read the
+   *  partial reply below it. */
+  hasText?: boolean;
+}) {
   const [encIdx, setEncIdx] = useState(0);
 
   // Rotate the encouragement message every 6s.
@@ -61,13 +70,32 @@ export function ChatThinkingIndicator({ toolCalls }: { toolCalls: ToolCall[] }) 
   const running = toolCalls.find((c) => c.status === 'running');
   const completed = toolCalls.filter((c) => c.status === 'done');
 
-  // Headline: the running tool's friendly label, or a default while we're
-  // still waiting for Claude to pick a tool / write a reply.
-  const headline = running
-    ? (TOOL_LABELS[running.name] ?? running.name)
-    : completed.length > 0
-      ? 'מנתח את התוצאות ומנסח תשובה…'
-      : 'מתחיל לעבוד על השאלה שלך…';
+  // Headline: depends on what stage we're in.
+  //   • Text streaming  → "writing the answer"
+  //   • Tool running    → that tool's friendly label
+  //   • Tools completed → "analyzing"
+  //   • Initial         → "starting"
+  const headline = hasText
+    ? 'מנסח את התשובה…'
+    : running
+      ? (TOOL_LABELS[running.name] ?? running.name)
+      : completed.length > 0
+        ? 'מנתח את התוצאות ומנסח תשובה…'
+        : 'מתחיל לעבוד על השאלה שלך…';
+
+  // Compact mode (text already streaming): one-line strip, no timeline / no
+  // encouragement copy. Just a "still working" reassurance above the reply.
+  if (hasText) {
+    return (
+      <div
+        dir="rtl"
+        className="flex items-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1.5 text-xs text-accent"
+      >
+        <Loader2 className="size-3.5 shrink-0 animate-spin" />
+        <span className="font-medium">{headline}</span>
+      </div>
+    );
+  }
 
   return (
     <div
