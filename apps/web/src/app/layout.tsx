@@ -20,7 +20,13 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="he" dir="rtl" className={heebo.variable} suppressHydrationWarning>
-      <body className="min-h-screen bg-background font-sans antialiased">
+      {/* suppressHydrationWarning on <body> too — Grammarly and similar
+          browser extensions inject data-* attributes here before React
+          loads, which otherwise produces a noisy hydration warning. */}
+      <body
+        className="min-h-screen bg-background font-sans antialiased"
+        suppressHydrationWarning
+      >
         {/* useSearchParams() inside NavigationProgress requires Suspense */}
         <Suspense fallback={null}>
           <NavigationProgress />
