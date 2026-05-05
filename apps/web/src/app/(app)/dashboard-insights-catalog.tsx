@@ -14,9 +14,9 @@
  * runtime check for drift — these are docs.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Eye,
+  Info,
   X,
   AlertOctagon,
   AlertTriangle,
@@ -120,59 +120,90 @@ const SEVERITY_ICON_COLOR: Record<Severity, string> = {
 
 export function InsightsCatalogToggle() {
   const [open, setOpen] = useState(false);
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  // Close on ESC
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    // Lock body scroll while modal is open
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
 
   return (
     <>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-label={open ? 'סגור תצוגת תובנות אפשריות' : 'הצג את כל סוגי התובנות שהמערכת בודקת'}
+        onClick={() => setOpen(true)}
+        aria-label="הצג את כל סוגי התובנות שהמערכת בודקת"
         title="אילו סוגי תובנות המערכת בודקת?"
-        className={cn(
-          'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-          open && 'bg-muted text-foreground',
-        )}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
-        {open ? <X className="size-4" /> : <Eye className="size-4" />}
+        <Info className="size-4" />
       </button>
 
       {open && (
-        // Inline catalog panel inserted below the widget header. dir="rtl" so
-        // Hebrew copy reads naturally; we render via a Portal-less stacking
-        // approach (just normal flow) because the widget container clips
-        // overflow already, and we want this to push other content down rather
-        // than float over it.
+        // Modal overlay — same pattern used elsewhere in the app
+        // (installment-modal.tsx, savings/client.tsx, etc.).
         <div
-          className="col-span-full mt-3 w-full overflow-hidden rounded-md border bg-background"
-          dir="rtl"
+          ref={backdropRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="insights-catalog-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === backdropRef.current) setOpen(false); }}
         >
-          <div className="border-b bg-muted/30 px-3 py-2">
-            <p className="text-xs font-semibold">תובנות שהמערכת בודקת אוטומטית</p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              כל אחת מהתובנות הבאות מחושבת בכל טעינה של הדשבורד. תובנה תופיע למעלה רק כאשר תנאי ההפעלה שלה מתקיים.
-            </p>
-          </div>
-          <ul className="divide-y">
-            {INSIGHT_CATALOG.map((entry) => {
-              const Icon = entry.icon;
-              const badge = SEVERITY_BADGE[entry.severity];
-              return (
-                <li key={entry.id} className="flex items-start gap-3 px-3 py-2.5 text-xs">
-                  <Icon className={cn('size-4 shrink-0 mt-0.5', SEVERITY_ICON_COLOR[entry.severity])} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground">{entry.title}</span>
-                      <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-medium', badge.className)}>
-                        {badge.label}
-                      </span>
+          <div
+            className="relative flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border bg-card shadow-xl"
+            dir="rtl"
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
+              <div className="min-w-0">
+                <h2 id="insights-catalog-title" className="text-base font-semibold">
+                  תובנות שהמערכת בודקת אוטומטית
+                </h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  כל אחת מהתובנות הבאות מחושבת בכל טעינה של הדשבורד. תובנה תופיע בווידג׳ט רק כאשר תנאי ההפעלה שלה מתקיים.
+                </p>
+              </div>
+              <button
+                onClick={() => setOpen(false)}
+                className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/40"
+                aria-label="סגור"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Catalog list (scrollable) */}
+            <ul className="flex-1 divide-y overflow-y-auto">
+              {INSIGHT_CATALOG.map((entry) => {
+                const Icon = entry.icon;
+                const badge = SEVERITY_BADGE[entry.severity];
+                return (
+                  <li key={entry.id} className="flex items-start gap-3 px-5 py-3 text-xs">
+                    <Icon className={cn('size-4 shrink-0 mt-0.5', SEVERITY_ICON_COLOR[entry.severity])} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{entry.title}</span>
+                        <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-medium', badge.className)}>
+                          {badge.label}
+                        </span>
+                      </div>
+                      <p className="mt-1 leading-relaxed text-muted-foreground">{entry.trigger}</p>
                     </div>
-                    <p className="mt-0.5 leading-relaxed text-muted-foreground">{entry.trigger}</p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </div>
       )}
     </>

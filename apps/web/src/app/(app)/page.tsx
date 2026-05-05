@@ -32,7 +32,7 @@ import {
   AlertOctagon,
   AlertTriangle,
   PartyPopper,
-  Eye,
+  Info,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -1036,36 +1036,22 @@ const SEVERITY_CFG: Record<InsightSeverity, {
 function InsightsWidget({ insights, month }: { insights: Insight[]; month: string }) {
   // We always render the widget — even with zero active insights — so the
   // user can open the "what does this widget watch?" catalog and understand
-  // what alerts to expect.
-
-  const criticalCount = insights.filter((i) => i.severity === 'critical').length;
-  const warningCount  = insights.filter((i) => i.severity === 'warning').length;
+  // what alerts to expect. The per-row severity badges already convey count
+  // visually, so the header stays minimal.
 
   void month; // used only by callers for href values inside computeInsights
 
   return (
     <section className="rounded-xl border bg-card overflow-hidden" dir="rtl">
       {/* header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
+      <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <Sparkles className="size-4 text-primary" />
           תובנות חכמות
         </h2>
-        <div className="flex items-center gap-1.5">
-          {criticalCount > 0 && (
-            <span className="rounded-full bg-destructive px-2 py-0.5 text-[10px] font-medium text-primary-foreground tabular-nums">
-              {criticalCount} קריטי
-            </span>
-          )}
-          {warningCount > 0 && (
-            <span className="rounded-full bg-warning px-2 py-0.5 text-[10px] font-medium text-primary-foreground tabular-nums">
-              {warningCount} אזהרה
-            </span>
-          )}
-          {/* Eye icon — opens the "what insights does this widget watch?"
-              catalog. Most useful when no insights are firing. */}
-          <InsightsCatalogToggle />
-        </div>
+        {/* Info icon — opens the "what insights does this widget watch?"
+            catalog in a modal. Most useful when no insights are firing. */}
+        <InsightsCatalogToggle />
       </div>
 
       {/* empty state */}
@@ -1073,7 +1059,7 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
         <div className="px-4 py-6 text-center">
           <p className="text-sm text-muted-foreground">אין תובנות פעילות כרגע</p>
           <p className="mt-1 text-xs text-muted-foreground/70">
-            לחץ על האייקון <Eye className="inline size-3" /> למעלה כדי לראות אילו תובנות המערכת בודקת
+            לחץ על אייקון ה-<Info className="inline size-3" /> למעלה כדי לראות אילו תובנות המערכת בודקת
           </p>
         </div>
       )}
