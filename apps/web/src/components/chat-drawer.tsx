@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { he } from '@fba/shared';
 import { cn } from '@/lib/utils';
 import { MessageCircle, Send, X, Loader2 } from 'lucide-react';
@@ -62,7 +64,6 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
 
   async function send(text: string) {
     if (!text.trim()) return;
-    console.log('[chat] send →', text);
     setMessages((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '', toolCalls: [] }]);
     setInput('');
 
@@ -80,7 +81,6 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         }),
       });
     } catch (err) {
-      console.error('[chat] fetch failed', err);
       setMessages((prev) => {
         const copy = [...prev];
         const errMsg = err instanceof Error ? err.message : he.chat.error;
@@ -90,11 +90,8 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
       return;
     }
 
-    console.log('[chat] response status', res.status, 'has body:', !!res.body);
-
     if (!res.ok || !res.body) {
       const fallback = await res.text().catch(() => he.chat.error);
-      console.error('[chat] non-ok response', fallback);
       setMessages((prev) => {
         const copy = [...prev];
         copy[copy.length - 1] = {
@@ -110,8 +107,6 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let eventCount = 0;
-    let textDeltaCount = 0;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -125,26 +120,21 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         const json = line.replace(/^data:\s*/, '');
         try {
           const data = JSON.parse(json);
-          eventCount++;
-          if (data.kind === 'text_delta') textDeltaCount++;
-          console.log('[chat] event', data.kind, data);
           handleEvent(data);
-        } catch (parseErr) {
-          console.warn('[chat] parse error on line', json, parseErr);
+        } catch {
+          // ignore malformed line
         }
       }
     }
 
-    console.log(`[chat] stream ended. ${eventCount} events, ${textDeltaCount} text_delta`);
-
     // If the stream finished but the assistant bubble is still empty, surface
     // a fallback message so the user doesn't stare at "thinking..." forever.
+    // (Belt-and-braces — agent normally emits at least one text_delta.)
     setMessages((prev) => {
       const copy = [...prev];
       const last = copy[copy.length - 1];
       if (last && last.role === 'assistant' && !last.text && !last.error) {
-        const fallback =
-          'העוזר סיים את הפעולה ללא טקסט תשובה. אם זה ממשיך לקרות, פתח את DevTools ובדוק את הקונסול.';
+        const fallback = 'העוזר סיים את הפעולה ללא טקסט תשובה. נסה לנסח מחדש את השאלה.';
         copy[copy.length - 1] = { ...last, text: fallback, error: fallback };
       }
       return copy;
@@ -281,14 +271,27 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
                   )}
                 </div>
               ))}
-              <div className="whitespace-pre-wrap leading-relaxed">
-                {m.text ||
-                  (m.role === 'assistant' && (
+              <div className="leading-relaxed">
+                {m.text ? (
+                  m.role === 'assistant' && !m.error ? (
+                    // Render Markdown for assistant replies. Claude leans on
+                    // tables, headings, and lists; remark-gfm adds GFM table
+                    // support. Custom component map keeps things on-brand and
+                    // RTL-aware (tabular-nums on numbers, sensible spacing).
+                    <MarkdownMessage text={m.text} />
+                  ) : (
+                    // User bubbles + error bubbles render as plain text — no
+                    // need to parse Markdown there.
+                    <div className="whitespace-pre-wrap">{m.text}</div>
+                  )
+                ) : (
+                  m.role === 'assistant' && (
                     <span className="inline-flex items-center gap-2 text-muted-foreground">
                       <Loader2 className="size-3 animate-spin" />
                       {he.chat.thinking}
                     </span>
-                  ))}
+                  )
+                )}
               </div>
             </div>
           ))}
@@ -321,5 +324,66 @@ export function ChatDrawer({ userId, householdId, userDisplayName }: ChatDrawerP
         </form>
       </aside>
     </>
+  );
+}
+
+/**
+ * Renders a Claude assistant reply (Markdown) inside a chat bubble. Hebrew /
+ * RTL friendly, finance-app friendly (tabular-nums in numeric cells, compact
+ * spacing, subtle borders on tables). Supports GFM tables via remark-gfm.
+ */
+function MarkdownMessage({ text }: { text: string }) {
+  return (
+    <div dir="rtl" className="space-y-2 text-sm">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="leading-relaxed">{children}</p>,
+          h1: ({ children }) => <h3 className="mt-2 text-base font-bold">{children}</h3>,
+          h2: ({ children }) => <h3 className="mt-2 text-sm font-bold">{children}</h3>,
+          h3: ({ children }) => <h4 className="mt-2 text-sm font-semibold">{children}</h4>,
+          h4: ({ children }) => <h5 className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{children}</h5>,
+          ul: ({ children }) => <ul className="list-disc space-y-0.5 ps-5">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal space-y-0.5 ps-5">{children}</ol>,
+          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+          em: ({ children }) => <em className="italic">{children}</em>,
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent underline underline-offset-2 hover:text-accent/80"
+            >
+              {children}
+            </a>
+          ),
+          code: ({ children }) => (
+            <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-xs">{children}</code>
+          ),
+          pre: ({ children }) => (
+            <pre className="overflow-x-auto rounded-md bg-background/80 p-2 font-mono text-xs">{children}</pre>
+          ),
+          hr: () => <hr className="my-2 border-border/60" />,
+          // GFM table renderers — give it a real bordered look so amounts line
+          // up. tabular-nums on the body keeps digits aligned regardless of
+          // glyph width.
+          table: ({ children }) => (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-xs">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-background/60">{children}</thead>,
+          tbody: ({ children }) => <tbody className="tabular-nums">{children}</tbody>,
+          tr: ({ children }) => <tr className="border-b border-border/60 last:border-0">{children}</tr>,
+          th: ({ children }) => (
+            <th className="px-2 py-1 text-start font-semibold">{children}</th>
+          ),
+          td: ({ children }) => <td className="px-2 py-1 text-start">{children}</td>,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
   );
 }
