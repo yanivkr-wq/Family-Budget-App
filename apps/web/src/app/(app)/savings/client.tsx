@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState, useTransition, type CSSProperties } from 'react';
 import { formatIls } from '@fba/shared';
 import {
   PiggyBank,
@@ -15,6 +15,13 @@ import {
   CircleDollarSign,
   ChevronDown,
   ChevronUp,
+  HeartPulse,
+  Car,
+  Home,
+  Plane,
+  BookOpen,
+  Wallet,
+  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createGoal, updateGoal, deleteGoal, updateGoalBalance } from './actions';
@@ -44,16 +51,45 @@ export interface MonthlySavingsData {
 
 // ─── icon/color presets ───────────────────────────────────────────────────────
 
-const ICON_PRESETS = [
-  { icon: '🏥', label: 'קרן חירום' },
-  { icon: '🚗', label: 'רכב' },
-  { icon: '🏠', label: 'דיור' },
-  { icon: '✈️', label: 'חופשה' },
-  { icon: '📚', label: 'חינוך' },
-  { icon: '💰', label: 'כללי' },
-  { icon: '🎯', label: 'יעד' },
-  { icon: '📈', label: 'השקעות' },
+// Lucide name → component map. We store the NAME (string) in the DB `icon`
+// column so SSR/JSON-serialization stays simple, then look up the component
+// here for rendering. Add new entries to both ICON_MAP and ICON_PRESETS.
+const ICON_MAP: Record<string, LucideIcon> = {
+  HeartPulse,
+  Car,
+  Home,
+  Plane,
+  BookOpen,
+  Wallet,
+  Target,
+  TrendingUp,
+  PiggyBank, // fallback / "general"
+};
+
+const ICON_PRESETS: Array<{ name: keyof typeof ICON_MAP; label: string }> = [
+  { name: 'HeartPulse', label: 'קרן חירום' },
+  { name: 'Car',        label: 'רכב' },
+  { name: 'Home',       label: 'דיור' },
+  { name: 'Plane',      label: 'חופשה' },
+  { name: 'BookOpen',   label: 'חינוך' },
+  { name: 'Wallet',     label: 'כללי' },
+  { name: 'Target',     label: 'יעד' },
+  { name: 'TrendingUp', label: 'השקעות' },
 ];
+
+/** Render a goal icon by stored name; fall back to PiggyBank if unknown/null. */
+function GoalIcon({
+  name,
+  className,
+  style,
+}: {
+  name: string | null;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const Icon: LucideIcon = (name ? ICON_MAP[name] : undefined) ?? PiggyBank;
+  return <Icon className={className} style={style} />;
+}
 
 const COLOR_PRESETS = [
   '#10b981', // emerald
@@ -109,7 +145,7 @@ function GoalForm({ goal, onClose }: GoalFormProps) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState(goal?.color ?? COLOR_PRESETS[0]!);
-  const [selectedIcon, setSelectedIcon] = useState(goal?.icon ?? ICON_PRESETS[0]!.icon);
+  const [selectedIcon, setSelectedIcon] = useState<string>(goal?.icon ?? ICON_PRESETS[0]!.name);
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -173,18 +209,18 @@ function GoalForm({ goal, onClose }: GoalFormProps) {
             <div className="flex flex-wrap gap-2">
               {ICON_PRESETS.map((p) => (
                 <button
-                  key={p.icon}
+                  key={p.name}
                   type="button"
                   title={p.label}
-                  onClick={() => setSelectedIcon(p.icon)}
+                  onClick={() => setSelectedIcon(p.name)}
                   className={cn(
-                    'flex h-9 w-9 items-center justify-center rounded-lg border text-lg transition-colors',
-                    selectedIcon === p.icon
-                      ? 'border-primary bg-primary-soft ring-1 ring-primary'
-                      : 'hover:bg-muted',
+                    'flex h-9 w-9 items-center justify-center rounded-lg border transition-colors',
+                    selectedIcon === p.name
+                      ? 'border-primary bg-primary-soft ring-1 ring-primary text-primary'
+                      : 'hover:bg-muted text-muted-foreground',
                   )}
                 >
-                  {p.icon}
+                  <GoalIcon name={p.name} className="size-4" />
                 </button>
               ))}
             </div>
@@ -454,7 +490,11 @@ function GoalCard({ goal, onEdit, onDelete, onUpdateBalance }: GoalCardProps) {
         {/* header row */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="text-2xl leading-none">{goal.icon ?? '💰'}</span>
+            <GoalIcon
+              name={goal.icon}
+              className={cn('size-6 shrink-0', !goal.color && 'text-muted-foreground')}
+              style={goal.color ? { color: goal.color } : undefined}
+            />
             <div>
               <p className="font-semibold">{goal.name}</p>
               {goal.description && (

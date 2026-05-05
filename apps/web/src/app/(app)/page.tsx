@@ -26,6 +26,10 @@ import {
   PiggyBank,
   Sparkles,
   ChevronLeft,
+  AlertOctagon,
+  AlertTriangle,
+  PartyPopper,
+  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -727,7 +731,7 @@ type InsightSeverity = 'critical' | 'warning' | 'info' | 'positive';
 interface Insight {
   id: string;
   severity: InsightSeverity;
-  icon: string;
+  icon: LucideIcon;
   title: string;
   body: string;
   href?: string;
@@ -763,7 +767,7 @@ function computeInsights(args: {
       insights.push({
         id: `over-budget-${cat.id}`,
         severity: 'critical',
-        icon: '🚨',
+        icon: AlertOctagon,
         title: `${cat.nameHe} — חרגת מהתקציב`,
         body: `הוצאת ${formatIls(actual, { decimals: false })} מתוך ${formatIls(target, { decimals: false })} (${formatIls(over, { decimals: false })} מעל)`,
         href: `/transactions?month=${month}`,
@@ -776,7 +780,7 @@ function computeInsights(args: {
     insights.push({
       id: 'projected-negative',
       severity: 'critical',
-      icon: '📉',
+      icon: TrendingDown,
       title: 'תחזית סוף חודש שלילית',
       body: `לפי קצב ההוצאות הנוכחי, הסוף חודש צפוי להיות ${formatIls(projectedEom, { decimals: false })}`,
     });
@@ -790,7 +794,7 @@ function computeInsights(args: {
         insights.push({
           id: `near-budget-${cat.id}`,
           severity: 'warning',
-          icon: '⚠️',
+          icon: AlertTriangle,
           title: `${cat.nameHe} — ${Math.round(pct)}% מהתקציב`,
           body: `נותר ${formatIls(target - actual, { decimals: false })} מתקציב ${formatIls(target, { decimals: false })}`,
           href: `/transactions?month=${month}`,
@@ -813,7 +817,7 @@ function computeInsights(args: {
         insights.push({
           id: `mom-spike-${cat.id}`,
           severity: 'warning',
-          icon: '📈',
+          icon: TrendingUp,
           title: `${cat.nameHe} — עלייה של ${pctIncrease}% לעומת חודש קודם`,
           body: `חודש שעבר: ${formatIls(prev, { decimals: false })} ← החודש: ${formatIls(actual, { decimals: false })}`,
           href: `/transactions?month=${month}`,
@@ -830,7 +834,7 @@ function computeInsights(args: {
         insights.push({
           id: `installment-missing-${plan.id}`,
           severity: 'warning',
-          icon: '💳',
+          icon: CreditCard,
           title: `תשלום "${name}" — לא קושרה עסקה החודש`,
           body: `תשלום חודשי ${formatIls(Math.abs(Number(plan.paymentAmountIls)), { decimals: false })} — כדאי לקשר לעסקה`,
           href: '/installments',
@@ -851,7 +855,7 @@ function computeInsights(args: {
       insights.push({
         id: `ending-soon-${plan.id}`,
         severity: 'info',
-        icon: '🎉',
+        icon: PartyPopper,
         title: `"${name}" ${endingThisMonth ? 'מסתיים החודש' : 'מסתיים בחודש הבא'}`,
         body: `תשלום חודשי ${formatIls(Math.abs(Number(plan.paymentAmountIls)), { decimals: false })} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}`,
         href: '/installments',
@@ -864,7 +868,7 @@ function computeInsights(args: {
     insights.push({
       id: 'no-income',
       severity: 'warning',
-      icon: '💰',
+      icon: Wallet,
       title: 'לא נרשמו הכנסות החודש',
       body: `כבר יום ${day} לחודש — בדוק שהכנסות הוזנו`,
       href: `/transactions?month=${month}`,
@@ -880,7 +884,7 @@ function computeInsights(args: {
         insights.push({
           id: 'under-budget',
           severity: 'positive',
-          icon: '🌟',
+          icon: Sparkles,
           title: 'תקציב בשליטה מצוינת',
           body: `הוצאת ${Math.round(pctUsed * 100)}% מהתקציב הכולל — חסכת ${formatIls(totalTarget - spent, { decimals: false })} עד כה`,
         });
@@ -901,6 +905,7 @@ const SEVERITY_CFG: Record<InsightSeverity, {
   rowBorder:   string;
   badgeBg:     string;
   badgeText:   string;
+  iconColor:   string;
   label:       string;
 }> = {
   critical: {
@@ -909,6 +914,7 @@ const SEVERITY_CFG: Record<InsightSeverity, {
     rowBorder: 'border-destructive/20',
     badgeBg:   'bg-destructive',
     badgeText: 'text-primary-foreground',
+    iconColor: 'text-destructive',
     label:     'קריטי',
   },
   warning: {
@@ -917,6 +923,7 @@ const SEVERITY_CFG: Record<InsightSeverity, {
     rowBorder: 'border-warning/20',
     badgeBg:   'bg-warning',
     badgeText: 'text-primary-foreground',
+    iconColor: 'text-warning',
     label:     'שים לב',
   },
   info: {
@@ -925,6 +932,7 @@ const SEVERITY_CFG: Record<InsightSeverity, {
     rowBorder: 'border-primary/15',
     badgeBg:   'bg-primary-soft',
     badgeText: 'text-primary',
+    iconColor: 'text-primary',
     label:     'מידע',
   },
   positive: {
@@ -933,6 +941,7 @@ const SEVERITY_CFG: Record<InsightSeverity, {
     rowBorder: 'border-success/20',
     badgeBg:   'bg-success-soft',
     badgeText: 'text-success',
+    iconColor: 'text-success',
     label:     'חיובי',
   },
 };
@@ -971,9 +980,10 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
       <ul className="divide-y">
         {insights.map((insight) => {
           const cfg = SEVERITY_CFG[insight.severity];
+          const Icon = insight.icon;
           const row = (
             <div className={cn('flex items-start gap-3 px-4 py-3', cfg.rowBg, insight.href && 'hover:brightness-95 transition-all')}>
-              <span className="text-base leading-none mt-0.5 shrink-0">{insight.icon}</span>
+              <Icon className={cn('size-4 shrink-0 mt-0.5', cfg.iconColor)} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium leading-snug">{insight.title}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{insight.body}</p>
