@@ -1,58 +1,99 @@
 'use client';
 
 /**
- * Click-to-expand "How did I reach this conclusion?" toggle for the dashboard
- * AI Insights widget. The widget itself is a Server Component; this small
- * island handles the only interactive bit — the disclosure.
+ * Per-insight "How did I reach this conclusion?" toggle.
+ *
+ * Renders a small Info button that opens a centered modal popup with the
+ * insight's title + plain-Hebrew calculation breakdown. The widget itself is
+ * a Server Component; this small island handles the only interactive bit.
+ *
+ * Mirrors the modal pattern used by InsightsCatalogToggle (and the rest of
+ * the app's modals — installment-modal, savings, etc.) so the widget UX is
+ * consistent: every "i" you click opens a popup.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Info, X } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 export function InsightDetailsToggle({
+  title,
   explanation,
-  className,
 }: {
+  title: string;
   explanation: string;
-  className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  // Close on ESC + lock body scroll while open. Same pattern as
+  // InsightsCatalogToggle.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
 
   return (
     <>
       <button
         type="button"
         // Stop the click from bubbling up to a parent <Link> (the whole row is
-        // sometimes wrapped in a Link to /transactions etc.)
+        // sometimes wrapped in a Link to /transactions etc.).
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setOpen((v) => !v);
+          setOpen(true);
         }}
-        aria-expanded={open}
-        aria-label={open ? 'סגור הסבר' : 'איך הגעתי לתובנה הזו?'}
+        aria-label="איך הגעתי לתובנה הזו?"
         title="איך הגעתי לתובנה הזו?"
-        className={cn(
-          'inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-          open && 'bg-muted text-foreground',
-          className,
-        )}
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
-        {open ? <X className="size-3" /> : <Info className="size-3.5" />}
+        <Info className="size-3.5" />
       </button>
 
       {open && (
-        // Inline expansion below the insight body. dir="rtl" so Hebrew text
-        // and the heading read naturally.
         <div
-          className="mt-2 rounded-md border bg-background/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
-          dir="rtl"
+          ref={backdropRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="insight-details-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === backdropRef.current) setOpen(false); }}
         >
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-            איך הגעתי למסקנה הזו?
-          </p>
-          <p className="whitespace-pre-line text-foreground/80">{explanation}</p>
+          <div
+            className="relative flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border bg-card shadow-xl"
+            dir="rtl"
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                  איך הגעתי למסקנה הזו?
+                </p>
+                <h2 id="insight-details-title" className="mt-0.5 text-base font-semibold leading-tight">
+                  {title}
+                </h2>
+              </div>
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); }}
+                className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/40"
+                aria-label="סגור"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto px-5 py-4 text-sm leading-relaxed text-foreground/85">
+              <p className="whitespace-pre-line">{explanation}</p>
+            </div>
+          </div>
         </div>
       )}
     </>

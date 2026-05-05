@@ -1073,15 +1073,17 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
             <div className={cn('flex items-start gap-3 px-4 py-3', cfg.rowBg, insight.href && 'hover:brightness-95 transition-all')}>
               <Icon className={cn('size-4 shrink-0 mt-0.5', cfg.iconColor)} />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium leading-snug">{insight.title}</p>
+                {/* Title row: title + Info button inline at the end */}
+                <p className="flex items-center gap-1.5 text-sm font-medium leading-snug">
+                  <span className="min-w-0">{insight.title}</span>
+                  {insight.explanation && (
+                    // Client island — opens a modal popup with the calculation
+                    // breakdown. Stops click propagation so it doesn't trigger
+                    // the row's parent <Link>.
+                    <InsightDetailsToggle title={insight.title} explanation={insight.explanation} />
+                  )}
+                </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{insight.body}</p>
-                {insight.explanation && (
-                  // The toggle is a Client island — clicking it expands the
-                  // explanation block right below the body, no navigation.
-                  <div className="mt-1.5">
-                    <InsightDetailsToggle explanation={insight.explanation} />
-                  </div>
-                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', cfg.badgeBg, cfg.badgeText)}>
