@@ -640,9 +640,17 @@ export default async function DashboardPage(props: {
                 {he.dashboard.perCategory}
               </h2>
               <CategoryDonut data={donutData} centerValue={spent} centerLabel="הוצא" />
-              <div className="mt-3 flex items-center gap-2 rounded-md border bg-accent-soft/50 p-2.5 text-xs text-accent">
-                <MessageCircle className="size-3.5 shrink-0" />
-                <span>שאל את העוזר בעברית — לדוגמה: &ldquo;איפה אפשר לחסוך?&rdquo; (⌘K)</span>
+              <div
+                dir="rtl"
+                className="mt-3 flex items-center gap-2.5 rounded-md border bg-accent-soft/50 p-2.5 text-xs text-accent"
+              >
+                {/* Icon on the visual end (left in RTL) so it never bumps into
+                    the first Hebrew character of the text. order-last keeps
+                    the DOM order natural for screen readers. */}
+                <MessageCircle className="order-last size-3.5 shrink-0" />
+                <span className="flex-1">
+                  שאל את העוזר בעברית — לדוגמה: &ldquo;איפה אפשר לחסוך?&rdquo; (⌘K)
+                </span>
               </div>
             </section>
 
