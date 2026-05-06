@@ -15,7 +15,7 @@ export type AmountConvention =
   | 'split_with_sign'   // two columns: amount + sign indicator (D/C)
   | 'unsigned_with_type'; // single amount column + a "type" column ("חיוב"/"זיכוי")
 
-export type DateFormat = 'iso' | 'dd/mm/yyyy' | 'dd.mm.yyyy' | 'dd-mm-yyyy' | 'auto';
+export type DateFormat = 'iso' | 'dd/mm/yyyy' | 'dd.mm.yyyy' | 'dd-mm-yyyy' | 'mm/dd/yyyy' | 'auto';
 
 export interface InstitutionTemplate {
   id: string;

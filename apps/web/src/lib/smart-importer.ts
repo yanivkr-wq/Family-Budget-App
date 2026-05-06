@@ -90,11 +90,30 @@ function parseDateForTemplate(raw: unknown, fmt: string): string | null {
   const s = String(raw ?? '').trim();
   if (!s) return null;
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  // dd/mm/yyyy or dd.mm.yyyy or dd-mm-yyyy
+  // Three-part date: each part can be d/m/y in any order. We can't know
+  // from a single cell whether the file uses D/M/Y (Israeli) or M/D/Y
+  // (US) when both the day and month are ≤ 12. So we honor the format
+  // hint passed in as fmt:
+  //   • 'mm/dd/yyyy' → first part = month, second = day
+  //   • everything else (default) → first = day, second = month
+  // For unambiguous values (one part > 12) we override the hint.
+  // The smart-importer detects M/D vs D/M per FILE before processing
+  // rows and passes the right hint here.
   const m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(s);
   if (m) {
-    let [, d, mo, y] = m;
+    let [, p1, p2, y] = m;
     if (y!.length === 2) y = '20' + y;
+    const p1n = Number(p1), p2n = Number(p2);
+    let d: string, mo: string;
+    if (p1n > 12 && p2n <= 12) {       // first MUST be day
+      d = p1!; mo = p2!;
+    } else if (p2n > 12 && p1n <= 12) { // second MUST be day → first is month
+      d = p2!; mo = p1!;
+    } else if (fmt === 'mm/dd/yyyy') {  // ambiguous: use hint
+      d = p2!; mo = p1!;
+    } else {                            // default: D/M/Y (Israeli)
+      d = p1!; mo = p2!;
+    }
     return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
   // Excel serial
@@ -375,6 +394,32 @@ export async function smartImport(
       : false;
 
     const cols = template.columns;
+
+    // ── Auto-detect M/D/Y vs D/M/Y for THIS sheet's date column.
+    // Templates default to D/M/Y (Israeli) but some bank exports use US
+    // M/D/Y (the Discount checking xlsx is one). Scan all date cells: if
+    // ANY has the second part > 12, the file must be M/D/Y. If ANY has
+    // the FIRST part > 12, must be D/M/Y. If neither is true (all
+    // dates have both parts ≤ 12), fall back to the template's hint.
+    let resolvedDateFormat = template.dateFormat;
+    if (resolvedDateFormat === 'auto' || resolvedDateFormat === 'dd/mm/yyyy') {
+      let firstGt12 = 0, secondGt12 = 0;
+      for (let i = headerRowIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!Array.isArray(r)) continue;
+        const cell = String(r[cols.transactionDate] ?? '').trim();
+        const m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-]\d{2,4}$/.exec(cell);
+        if (!m) continue;
+        const p1 = Number(m[1]), p2 = Number(m[2]);
+        if (p1 > 12 && p2 <= 12) firstGt12++;
+        else if (p2 > 12 && p1 <= 12) secondGt12++;
+      }
+      // Decisive: if one side has hits and the other doesn't, that wins.
+      if (secondGt12 > 0 && firstGt12 === 0) resolvedDateFormat = 'mm/dd/yyyy';
+      else if (firstGt12 > 0 && secondGt12 === 0) resolvedDateFormat = 'dd/mm/yyyy';
+      // Else: leave as template default (parser uses fmt hint)
+    }
+
     for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const row = rows[i];
       if (!Array.isArray(row)) continue;
@@ -406,7 +451,7 @@ export async function smartImport(
         continue;
       }
 
-      const txnDate = parseDateForTemplate(row[cols.transactionDate], template.dateFormat);
+      const txnDate = parseDateForTemplate(row[cols.transactionDate], resolvedDateFormat);
       if (!txnDate) {
         // Could be a footer/totals row — skip silently if we already have data.
         if (i - headerRowIdx > 3 && transactions.length > 0) continue;
@@ -481,7 +526,7 @@ export async function smartImport(
       //   4. null (calculated later from billing-cycle logic)
       let chargeDate: string | null = null;
       if (cols.chargeDate !== undefined) {
-        chargeDate = parseDateForTemplate(row[cols.chargeDate], template.dateFormat);
+        chargeDate = parseDateForTemplate(row[cols.chargeDate], resolvedDateFormat);
       }
       if (!chargeDate && (isForex || sheetIsForex)) chargeDate = txnDate;
       if (!chargeDate && globalChargeDate) chargeDate = globalChargeDate;
