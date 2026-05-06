@@ -25,26 +25,65 @@ interface AccountOption {
   purpose: 'personal' | 'business' | 'shared';
 }
 
+/** Per-file entry in the batch progress + results list. */
+interface BatchEntry {
+  file:     File;
+  status:   'pending' | 'running' | 'done' | 'error';
+  result?:  BankExportImportResult;
+  error?:   string;
+}
+
 export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) {
-  const [accountId, setAccountId] = useState<string>(accounts[0]?.id ?? '');
-  const [filename, setFilename]   = useState<string | null>(null);
-  const [result, setResult]       = useState<BankExportImportResult | null>(null);
+  const [accountId, setAccountId] = useState<string>('');
+  const [files, setFiles]         = useState<File[]>([]);
+  const [batch, setBatch]         = useState<BatchEntry[]>([]);
   const [isPending, startTransition] = useTransition();
+
+  function onFilesChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = e.target.files;
+    if (!list) return;
+    setFiles(Array.from(list));
+    // Reset previous batch results when new files are picked.
+    setBatch([]);
+  }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = e.currentTarget;
-    const data = new FormData(form);
-    const file = data.get('file');
-    if (!(file instanceof File) || file.size === 0) return;
-    // accountId is OPTIONAL — empty means "auto-detect via externalKey".
-    // If detection fails server-side, the result card surfaces an error.
-    setFilename(file.name);
-    setResult(null);
+    if (files.length === 0) return;
+
+    // Initialize the batch progress list — every file starts pending.
+    const initial: BatchEntry[] = files.map((file) => ({ file, status: 'pending' }));
+    setBatch(initial);
+
     startTransition(async () => {
-      const r = await importBankExport(data);
-      setResult(r);
-      if (r.ok && r.inserted > 0) form.reset();
+      // Process files SEQUENTIALLY — not in parallel — for two reasons:
+      //   • Cross-account transfer pairing (Pass 5 in the import action)
+      //     queries ALL unpaired transfers in the household, so each file
+      //     needs to see the previous files' inserts to find its pair.
+      //   • Avoid hammering the DB / Anthropic API with concurrent
+      //     server-action calls.
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]!;
+        // Mark "running" before the await
+        setBatch((prev) => prev.map((b, idx) => idx === i ? { ...b, status: 'running' } : b));
+        try {
+          const fd = new FormData();
+          fd.set('file', file);
+          if (accountId) fd.set('accountId', accountId);
+          const r = await importBankExport(fd);
+          setBatch((prev) => prev.map((b, idx) =>
+            idx === i ? { ...b, status: r.ok ? 'done' : 'error', result: r } : b,
+          ));
+        } catch (err) {
+          setBatch((prev) => prev.map((b, idx) =>
+            idx === i ? { ...b, status: 'error', error: err instanceof Error ? err.message : 'שגיאה' } : b,
+          ));
+        }
+      }
+      // Reset file input after the whole batch completes
+      setFiles([]);
+      const fileInput = document.querySelector<HTMLInputElement>('input[name="files"]');
+      if (fileInput) fileInput.value = '';
     });
   }
 
@@ -57,15 +96,18 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
     );
   }
 
+  // Aggregate stats across the batch — useful for an "all done" summary.
+  const completed = batch.filter((b) => b.status === 'done' || b.status === 'error');
+  const allDone = batch.length > 0 && completed.length === batch.length;
+  const totalInserted = completed.reduce((s, b) => s + (b.result?.inserted ?? 0), 0);
+
   return (
     <div className="space-y-4">
       <form onSubmit={onSubmit} className="space-y-3" dir="rtl">
-        {/* Account selector — OPTIONAL.
-            When left as "auto-detect", the importer matches the file's
-            embedded identifier (CC last-4, bank account number, sheet
-            name) against `account.externalKey` and routes automatically.
-            Configure the externalKey once per account in /admin/accounts
-            and you'll never have to pick from this dropdown again. */}
+        {/* Account override (OPTIONAL).
+            For batch upload this applies to ALL files. Leave on
+            "auto-detect" so each file routes to its own account via
+            externalKey — that's the whole point of the bulk flow. */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-muted-foreground">
             חשבון יעד
@@ -77,7 +119,7 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
             disabled={isPending}
             className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">— זיהוי אוטומטי לפי הקובץ —</option>
+            <option value="">— זיהוי אוטומטי לפי הקובץ (מומלץ) —</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} · {a.type === 'credit_card' ? 'אשראי' : 'בנק'} · {a.purpose === 'business' ? 'עסקי' : a.purpose === 'shared' ? 'משותף' : 'אישי'}
@@ -85,36 +127,119 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
             ))}
           </select>
           <p className="text-[11px] text-muted-foreground">
-            השאר ב-&quot;זיהוי אוטומטי&quot; — אם הוגדר &quot;מזהה חיצוני&quot; באחד החשבונות
-            ב-<a className="underline" href="/admin/accounts">חשבונות</a>, נחבר אותו אוטומטית.
-            אחרת בחר חשבון מפורש.
+            במצב &quot;זיהוי אוטומטי&quot; כל קובץ ירוּתב לחשבון שלו לפי
+            &quot;מזהה חיצוני&quot; שהוגדר ב-<a className="underline" href="/admin/accounts">חשבונות</a>.
+            לחילופין בחר חשבון מפורש — יחול על כל הקבצים שתעלה כעת.
           </p>
         </div>
 
-        {/* File picker + submit on one row */}
+        {/* Multi-file picker + submit */}
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex-1 cursor-pointer">
             <input
               type="file"
-              name="file"
+              name="files"
+              multiple
               accept=".csv,.tsv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               required
               disabled={isPending}
+              onChange={onFilesChange}
               className="block w-full text-sm file:me-3 file:rounded-md file:border-0 file:bg-primary-soft file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary file:transition-colors hover:file:bg-primary-soft/70"
             />
           </label>
-          <button type="submit" disabled={isPending} className="btn-primary">
+          <button type="submit" disabled={isPending || files.length === 0} className="btn-primary">
             {isPending ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-            {isPending ? 'מייבא…' : 'ייבא'}
+            {isPending
+              ? `מייבא… ${batch.filter((b) => b.status === 'done' || b.status === 'error').length}/${batch.length}`
+              : files.length > 1 ? `ייבא ${files.length} קבצים` : 'ייבא'}
           </button>
         </div>
+
+        {/* File list preview before submit */}
+        {files.length > 0 && batch.length === 0 && (
+          <ul className="space-y-1 rounded-md border bg-card p-2 text-xs">
+            {files.map((f, i) => (
+              <li key={`${f.name}-${i}`} className="flex items-center gap-2 text-muted-foreground">
+                <FileSpreadsheet className="size-3.5 shrink-0" />
+                <span className="truncate">{f.name}</span>
+                <span className="ms-auto tabular-nums">{(f.size / 1024).toFixed(0)} KB</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </form>
 
-      {filename && !isPending && result === null && (
-        <p className="text-xs text-muted-foreground">קובץ נבחר: {filename}</p>
+      {/* Batch progress + per-file results */}
+      {batch.length > 0 && (
+        <div className="space-y-2">
+          {allDone && (
+            <div className="rounded-md border border-success/40 bg-success-soft/40 p-3 text-sm">
+              <p className="font-semibold text-success">
+                ✓ הסתיים: {completed.filter((b) => b.status === 'done').length}/{batch.length} קבצים, {totalInserted} תנועות נוספו
+              </p>
+            </div>
+          )}
+          {batch.map((entry, i) => (
+            <BatchRow key={i} entry={entry} index={i} />
+          ))}
+        </div>
       )}
+    </div>
+  );
+}
 
-      {result && <ResultCard result={result} />}
+/** One row in the batch progress list. Collapsed by default to keep the
+ *  page short; expand to see the full BankExportImportResult stat tiles. */
+function BatchRow({ entry, index }: { entry: BatchEntry; index: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const statusColor =
+    entry.status === 'done'   ? 'border-success/40 bg-success-soft/30' :
+    entry.status === 'error'  ? 'border-destructive/40 bg-destructive-soft/30' :
+    entry.status === 'running'? 'border-primary/40 bg-primary-soft/30 animate-pulse' :
+                                'border-border bg-card';
+  const statusIcon =
+    entry.status === 'done'   ? <CheckCircle2 className="size-4 text-success" /> :
+    entry.status === 'error'  ? <AlertTriangle className="size-4 text-destructive" /> :
+    entry.status === 'running'? <Loader2 className="size-4 animate-spin text-primary" /> :
+                                <FileSpreadsheet className="size-4 text-muted-foreground" />;
+  const r = entry.result;
+
+  return (
+    <div className={`rounded-md border ${statusColor}`} dir="rtl">
+      <button
+        type="button"
+        onClick={() => r && setExpanded(!expanded)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-start text-sm"
+      >
+        {statusIcon}
+        <span className="text-xs font-medium tabular-nums text-muted-foreground">{index + 1}.</span>
+        <span className="truncate font-medium">{entry.file.name}</span>
+        {r?.destinationAccountName && (
+          <span className="text-xs text-muted-foreground">
+            → {r.destinationAccountName}
+            {r.autoRoutedAccount && (
+              <span className="ms-1 inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                אוטומטי
+              </span>
+            )}
+          </span>
+        )}
+        {r?.ok && (
+          <span className="ms-auto text-xs text-muted-foreground">
+            {r.inserted} נוספו
+            {r.upgradedDuplicates > 0 && ` · ${r.upgradedDuplicates} שודרגו`}
+            {r.duplicates > 0 && ` · ${r.duplicates} כפילויות`}
+          </span>
+        )}
+        {!r?.ok && r?.message && (
+          <span className="ms-auto text-xs text-destructive">{r.message}</span>
+        )}
+      </button>
+      {expanded && r && (
+        <div className="border-t bg-card/50 p-3">
+          <ResultCard result={r} />
+        </div>
+      )}
     </div>
   );
 }
