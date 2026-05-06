@@ -811,8 +811,13 @@ export default async function DashboardPage(props: {
                                 )}
                               </div>
                               {cat ? (
+                                // justify-self-start = right edge in RTL —
+                                // every badge starts at the right edge of
+                                // the 7rem slot so all right-edges line
+                                // up vertically, matching the user's
+                                // "aligned to the right" expectation.
                                 <span
-                                  className="justify-self-end inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap"
+                                  className="justify-self-start inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap"
                                   style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
                                 >
                                   {cat.nameHe}
