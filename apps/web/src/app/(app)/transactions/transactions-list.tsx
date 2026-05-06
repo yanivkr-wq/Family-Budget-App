@@ -225,11 +225,18 @@ export function TransactionsList(props: {
       )}
 
       {props.transactions.length > 0 && (
-        // overflow-x-auto on the section so the table can scroll horizontally
-        // while the sticky END column (actions) stays pinned to the leading
-        // edge. Without this the table just expands the parent and there's
-        // no scroll for the sticky to anchor against.
-        <section className="rounded-lg border bg-card overflow-x-auto">
+        // The section is a TWO-AXIS scroll container:
+        //   • overflow-x-auto → horizontal scroll for wide tables (gives the
+        //     sticky END actions column something to anchor against)
+        //   • overflow-y-auto + max-height → vertical scroll INSIDE the
+        //     table area (gives the sticky top thead something to engage
+        //     against). max-h is calc'd from viewport so the table grows
+        //     to fill remaining space below the toolbar but never spills
+        //     past the bottom of the screen.
+        // Net effect: headers stay pinned at top while you scroll rows;
+        // actions column stays pinned at leading edge while you scroll wide
+        // tables. Same UX as Excel/Google Sheets.
+        <section className="rounded-lg border bg-card overflow-auto max-h-[calc(100vh-15rem)]">
           {/* On screens >=lg the cells switch to whitespace-nowrap so wide
               monitors actually USE the horizontal real estate instead of
               wrapping Hebrew text mid-column. notes column still truncates

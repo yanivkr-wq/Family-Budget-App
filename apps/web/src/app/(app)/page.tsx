@@ -793,14 +793,15 @@ export default async function DashboardPage(props: {
                         ההוצאות הגדולות ביותר
                       </p>
                       {/* 3-column grid: merchant | category | amount.
-                          The category column has a fixed width so all
-                          badges line up vertically across rows, matching
-                          the user's request. */}
+                          The category column gets a FIXED 7rem width so
+                          every badge starts at the same horizontal
+                          position across rows. justify-self-end keeps
+                          the badge right-aligned within that fixed slot. */}
                       <ul className="divide-y rounded-md border">
                         {topRecurringExpenses.map((p) => {
                           const cat = p.categoryId ? catMap.get(p.categoryId) : null;
                           return (
-                            <li key={p.merchantNormalized} className="grid grid-cols-[1fr_minmax(5rem,auto)_auto] items-center gap-2 px-3 py-1.5 text-sm">
+                            <li key={p.merchantNormalized} className="grid grid-cols-[1fr_7rem_auto] items-center gap-2 px-3 py-1.5 text-sm">
                               <div className="min-w-0">
                                 <div className="truncate font-medium">{p.merchantNormalized}</div>
                                 {p.description && (
