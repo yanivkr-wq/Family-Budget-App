@@ -163,9 +163,69 @@ interface ParsedSheet {
   rows: unknown[][];
 }
 
+/**
+ * Israeli bank portals sometimes serve "Excel" downloads that are actually
+ * HTML tables with a .xls extension and an HTML MIME type. Excel opens them
+ * via a "format-doesn't-match-extension" prompt; xlsx-js doesn't recognize
+ * them because the magic bytes are HTML (`<HTML…`) not OLE/Zip.
+ *
+ * Detect by sniffing the first few bytes for a `<` or "html" marker and,
+ * if so, parse the embedded `<table>` rows ourselves with regex (good
+ * enough for these rectangular bank exports — no nested tables, no
+ * complex markup).
+ */
+function looksLikeHtml(buffer: Buffer): boolean {
+  const head = buffer.slice(0, 64).toString('utf8').toLowerCase().trim();
+  return head.startsWith('<') && (head.includes('html') || head.includes('table') || head.includes('!doctype'));
+}
+
+function parseHtmlTable(html: string): unknown[][] {
+  // Strip styles / scripts so they don't pollute cell text.
+  const cleaned = html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  const rows: unknown[][] = [];
+  const trMatcher = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let trMatch: RegExpExecArray | null;
+  while ((trMatch = trMatcher.exec(cleaned))) {
+    const rowHtml = trMatch[1] ?? '';
+    const cells: string[] = [];
+    const cellMatcher = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = cellMatcher.exec(rowHtml))) {
+      const inner = cellMatch[1] ?? '';
+      // Strip nested tags, decode common entities, collapse whitespace.
+      const text = inner
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+        .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+        .replace(/\s+/g, ' ')
+        .trim();
+      cells.push(text);
+    }
+    if (cells.length > 0) rows.push(cells);
+  }
+  return rows;
+}
+
 async function readSheets(buffer: ArrayBuffer | Buffer, isExcel: boolean): Promise<ParsedSheet[]> {
   if (isExcel) {
-    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);
+    // Sniff for HTML-as-.xls before handing to xlsx — see looksLikeHtml above.
+    if (looksLikeHtml(buf)) {
+      const html = buf.toString('utf8');
+      const rows = parseHtmlTable(html);
+      return [{ sheetName: 'Sheet1', rows }];
+    }
+    const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
     return wb.SheetNames.map((name) => {
       const ws = wb.Sheets[name];
       const rows = ws
@@ -542,8 +602,32 @@ export async function smartImport(
       if (m) accountKey = m[1]!.replace(/[\s-]/g, '');
       break;
     }
-    // leumi (current accounts) and tagged-export don't carry a stable
-    // file-level identifier — user must select the account manually.
+    case 'leumi': {
+      // Israeli current-account exports (Leumi + Discount) put the
+      // account number in a header row above the data, like:
+      //   "חשבון: 0103054393"
+      //   "חשבון: 669-4703428"
+      // Sweep the first 10 rows for any 7+ digit run (account numbers
+      // are 7-12 digits). Collect ALL candidates so the user can set
+      // externalKey to the format their portal uses.
+      const candidates = new Set<string>();
+      for (const sheet of sheets) {
+        for (let i = 0; i < Math.min(10, sheet.rows.length); i++) {
+          const r = sheet.rows[i];
+          if (!Array.isArray(r)) continue;
+          const text = r.map((c) => String(c ?? '')).join(' ');
+          for (const m of text.matchAll(/(\d[\d\-]{6,})/g)) {
+            // Strip dashes for one variant + keep original for another
+            candidates.add(m[1]!);
+            candidates.add(m[1]!.replace(/[\-\s]/g, ''));
+          }
+        }
+      }
+      if (candidates.size > 0) accountKey = [...candidates].join(' ');
+      break;
+    }
+    // tagged-export doesn't carry a stable file-level identifier — the
+    // user must select the account manually.
   }
 
   return {

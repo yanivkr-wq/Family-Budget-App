@@ -135,6 +135,48 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     defaultIsExpense: true,
   },
 
+  // -------- Bank Leumi business — HTML-as-.xls export --------
+  // Leumi's web portal serves business-account "Excel" downloads as HTML
+  // tables with .xls extension and an HTML MIME type. xlsx-js can't parse
+  // them as real workbooks; we sniff for `<HTML…` magic and parse the
+  // <table> rows ourselves (see smart-importer's looksLikeHtml /
+  // parseHtmlTable). Once extracted, the table layout is:
+  //   col 0 = תאריך (transaction date)
+  //   col 1 = תאריך ערך (value date)
+  //   col 2 = תיאור (description / merchant)
+  //   col 3 = אסמכתא (reference number — NOT amount!)
+  //   col 4 = בחובה (debit)
+  //   col 5 = בזכות (credit)
+  //   col 6 = היתרה בש"ח (balance)
+  //   col 7 = הערה (notes)
+  //
+  // Listed BEFORE the generic Hapoalim template so its more-specific
+  // keywords win. Detection requires "בחובה"+"בזכות" together — that
+  // exact pair is what distinguishes this format from the single-signed
+  // ₪ זכות/חובה column the new Leumi/Discount checking exports use.
+  {
+    id: 'leumi-business-html',
+    name: 'בנק לאומי — עו״ש עסקי (HTML)',
+    type: 'bank',
+    detectionKeywords: [
+      'בנק לאומי',
+      'בחובה', 'בזכות',
+      'מס\' חשבון',
+    ],
+    headerRowIndex: 'auto',
+    columns: {
+      transactionDate: 0,
+      merchant:        2,
+      debit:           4,
+      credit:          5,
+      balance:         6,
+      notes:           7,
+    },
+    amountConvention: 'split_debit_credit',
+    dateFormat: 'dd/mm/yyyy',
+    defaultIsExpense: true,
+  },
+
   // -------- Bank Hapoalim (CSV/Excel export) --------
   // Detection: REQUIRES the bank's name + a column-name keyword to avoid
   // greedy matches against generic exports. Pure header keywords like
