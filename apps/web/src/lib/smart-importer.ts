@@ -475,36 +475,47 @@ export async function smartImport(
   let accountKey: string | null = null;
   switch (template.id) {
     case 'discount-key': {
-      // col [3] holds the card last-4 on EVERY data row. Should be one
-      // distinct value per file (single-card export); if there are
-      // multiple, leave null (multi-card files need explicit account).
-      const distinct = new Set<string>();
+      // col [3] = card last-4. Multi-card files (Discount Key can hold
+      // several) leave the key null so the user picks explicitly.
+      // Single-card files use the unique value.
+      const counts = new Map<string, number>();
       for (const sheet of sheetsToProcess) {
         for (let i = 0; i < sheet.rows.length; i++) {
           const r = sheet.rows[i];
           if (!Array.isArray(r)) continue;
           const v = String(r[3] ?? '').trim();
-          if (/^\d{4}$/.test(v)) distinct.add(v);
+          if (/^\d{4}$/.test(v)) counts.set(v, (counts.get(v) ?? 0) + 1);
         }
       }
-      if (distinct.size === 1) accountKey = [...distinct][0]!;
+      // Discount Key really IS multi-card sometimes (col [3] differs
+      // across cards). If there's more than one distinct value, return
+      // null — caller forces explicit pick to avoid wrong routing.
+      if (counts.size === 1) accountKey = [...counts.keys()][0]!;
       break;
     }
     case 'il-cc-issuer-export': {
-      // col [5] = "GooglePay 9648" / "אינטרנט 3767" / similar. Pull the
-      // trailing 4-digit token. Aggregate across rows; require exactly
-      // one distinct identifier (single-card files).
-      const distinct = new Set<string>();
+      // col [5] = "GooglePay 9648" / "אינטרנט 1939" / "אינטרנט 3767".
+      // The SAME physical card may show MULTIPLE trailing 4-digit
+      // tokens (Google Pay token vs online-purchase token vs physical
+      // card). Pick the DOMINANT (most-rows) identifier — that's what
+      // the user is most likely to recognize as "this card".
+      const counts = new Map<string, number>();
       for (const sheet of sheetsToProcess) {
         for (let i = 0; i < sheet.rows.length; i++) {
           const r = sheet.rows[i];
           if (!Array.isArray(r)) continue;
           const cell = String(r[5] ?? '').trim();
           const m = /(\d{4})\s*$/.exec(cell);
-          if (m) distinct.add(m[1]!);
+          if (m) counts.set(m[1]!, (counts.get(m[1]!) ?? 0) + 1);
         }
       }
-      if (distinct.size === 1) accountKey = [...distinct][0]!;
+      if (counts.size > 0) {
+        // Sort by count desc → take the leader. Any one of the tokens
+        // can be set as externalKey — the importer's includes() match
+        // means the user only needs to know any one of them.
+        const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+        accountKey = sorted[0]![0];
+      }
       break;
     }
     case 'il-cc-bank-export': {
