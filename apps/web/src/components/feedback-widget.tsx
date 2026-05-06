@@ -12,7 +12,7 @@
 
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, useTransition } from 'react';
-import { MessageSquarePlus, X, Loader2 } from 'lucide-react';
+import { ThumbsUp, X, Loader2 } from 'lucide-react';
 import { createFeedback } from '@/app/(app)/admin/feedback/actions';
 
 type Category = 'bug' | 'ux' | 'feature' | 'other';
@@ -92,7 +92,7 @@ export function FeedbackWidget() {
         aria-label="שלח פידבק"
         className="fixed bottom-20 start-4 z-40 inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg hover:bg-accent/40 md:bottom-4"
       >
-        <MessageSquarePlus className="size-3.5 text-primary" />
+        <ThumbsUp className="size-3.5 text-primary" />
         <span className="hidden sm:inline">פידבק</span>
       </button>
 
