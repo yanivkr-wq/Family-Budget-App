@@ -49,6 +49,22 @@ interface Transaction {
   // to the section-header recurring subtotal.
   recurringPatternId?:        string | null;
   recurringPatternFrequency?: string | null; // 'monthly' | 'bimonthly' etc.
+  /** Forex original amount + currency (when set, the row was a non-NIS
+   *  purchase that the bank converted to ILS). Surfaces a "$ 20.00" pill
+   *  next to the merchant name. */
+  originalAmount?:   number | null;
+  originalCurrency?: string | null;
+  /** Cross-account transfer pair link — when set, this row matches another
+   *  row in a different account; both are excluded from cash-flow totals. */
+  transferPairId?: string | null;
+  /** Provenance for the source-column tooltip. */
+  importFilename?:  string | null;
+  importCreatedAt?: string | null;
+  /** True when this row is a SYNTHESIZED projected installment payment
+   *  (no real transaction yet, generated from the active plan's schedule).
+   *  Renders with reduced opacity + a "צפוי" badge so the user can tell
+   *  it apart from real charges. */
+  isProjected?: boolean;
 }
 
 function sumExpenses(txns: Transaction[]) {
@@ -381,6 +397,11 @@ export function TransactionsList(props: {
                         // installment-linked rows so they stand out at a glance
                         // without changing the row layout.
                         isInstallment && 'border-r-2 border-r-primary/60',
+                        // Projected installment payments (no actual transaction
+                        // imported yet) — render with reduced opacity + diagonal
+                        // dashed background so they're clearly distinguishable
+                        // from real charges.
+                        t.isProjected && 'opacity-60 italic bg-muted/20',
                       )}
                     >
                       {/* Selection checkbox (always-on bookend) — vertically

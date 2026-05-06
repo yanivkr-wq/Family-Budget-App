@@ -100,6 +100,7 @@ export default async function TransactionsPage(props: {
       id: schema.transactions.id,
       date: schema.transactions.transactionDate,
       chargeDate: schema.transactions.chargeDate,
+      billingMonth: schema.transactions.billingMonth,
       amount: schema.transactions.amountIls,
       merchant: schema.transactions.merchantRaw,
       categoryId: schema.transactions.categoryId,
@@ -183,6 +184,113 @@ export default async function TransactionsPage(props: {
     )
     .orderBy(desc(schema.transactions.transactionDate));
 
+  // ── Projected installment payments ────────────────────────────────────────
+  //
+  // Each active installment_plan represents a multi-month obligation
+  // (e.g., ג'ון ברייס: 4 payments of ₪1,106 from Feb→May 2026). When the
+  // user only imported the file containing payment 1, payments 2/3/4
+  // never appear on /transactions for those months until they upload the
+  // matching CC files later — which makes cash-flow projection wrong.
+  //
+  // Solution: synthesize projected rows on-the-fly here. For each active
+  // plan, work out the expected billing month for each remaining payment.
+  // If the current view's month matches AND no real transaction exists
+  // for that plan in that month, add a projected row (isProjected=true).
+  // The list renders these with a "צפוי" badge + reduced opacity so the
+  // user can tell them apart from real charges.
+  const activePlans = await db
+    .select({
+      id: schema.installmentPlans.id,
+      accountId: schema.installmentPlans.accountId,
+      merchantNormalized: schema.installmentPlans.merchantNormalized,
+      description: schema.installmentPlans.description,
+      paymentAmountIls: schema.installmentPlans.paymentAmountIls,
+      totalPayments: schema.installmentPlans.totalPayments,
+      currentPaymentNo: schema.installmentPlans.currentPaymentNo,
+      startMonth: schema.installmentPlans.startMonth,
+      projectedEndMonth: schema.installmentPlans.projectedEndMonth,
+    })
+    .from(schema.installmentPlans)
+    .where(and(
+      eq(schema.installmentPlans.householdId, householdId),
+      eq(schema.installmentPlans.status, 'active'),
+      accountFilter !== null
+        ? inArray(schema.installmentPlans.accountId, accountFilter)
+        : undefined,
+    ));
+
+  // Look up the most-recent real transaction per plan so the projected
+  // row can inherit its category (one less unknown for the user).
+  const planCategoryHints = new Map<string, { categoryId: string | null; subCategoryId: string | null }>();
+  for (const t of txns) {
+    if (t.installmentPlanId && !planCategoryHints.has(t.installmentPlanId)) {
+      planCategoryHints.set(t.installmentPlanId, {
+        categoryId: t.categoryId,
+        subCategoryId: t.subCategoryId,
+      });
+    }
+  }
+
+  type TxnRow = typeof txns[number];
+  const projectedTxns: TxnRow[] = [];
+  for (const plan of activePlans) {
+    if (!plan.totalPayments) continue;
+    // Only project payments that haven't been recorded yet — anything
+    // up to currentPaymentNo is already in the file (or earlier files).
+    for (let n = plan.currentPaymentNo + 1; n <= plan.totalPayments; n++) {
+      const paymentMonth = addMonth(plan.startMonth, n - 1);
+      if (paymentMonth !== month) continue; // not in the view's billing month
+
+      // Skip if a real transaction for this plan already exists in this
+      // billing month (handles re-imports and edge cases gracefully).
+      const realExists = txns.some((t) =>
+        t.installmentPlanId === plan.id && t.billingMonth === paymentMonth,
+      );
+      if (realExists) continue;
+
+      const hints = planCategoryHints.get(plan.id);
+      // Synth charge_date = the 10th of the billing month (Israeli CC
+      // convention). transaction_date = same — projections don't have a
+      // real purchase date, so we use the charge date as a placeholder.
+      const synthDate = `${paymentMonth}-10`;
+      projectedTxns.push({
+        ...({} as TxnRow), // satisfy TS — we override every field below
+        id:           `projected-${plan.id}-${n}`,
+        date:         synthDate,
+        chargeDate:   synthDate,
+        billingMonth: paymentMonth,
+        amount:       String(-Math.abs(Number(plan.paymentAmountIls))),
+        merchant:     plan.description ?? plan.merchantNormalized,
+        categoryId:   hints?.categoryId ?? null,
+        subCategoryId: hints?.subCategoryId ?? null,
+        accountId:    plan.accountId ?? '',
+        isManual:     false,
+        notes:        `תשלום ${n} מתוך ${plan.totalPayments} (צפוי — טרם נקלט)`,
+        appliedRuleId:     null,
+        categorySource:    null,
+        ruleName:          null,
+        rulePattern:       null,
+        installmentPlanId:           plan.id,
+        installmentCurrentPaymentNo: n,
+        installmentTotalPayments:    plan.totalPayments,
+        installmentEndMonth:         plan.projectedEndMonth,
+        recurringPatternId:        null,
+        recurringPatternFrequency: null,
+        originalAmount:   null,
+        originalCurrency: null,
+        transferPairId:   null,
+        importFilename:   null,
+        importCreatedAt:  null,
+      });
+    }
+  }
+
+  // Inject projections at the END of the array (most recent dates first
+  // already due to the orderBy). The list will sort/group naturally.
+  // We tag them via `isProjected: true` on the row interface — adding
+  // that flag to the row type extension below.
+  const txnsWithProjections = [...txns, ...projectedTxns];
+
   // ── Cycle metadata ────────────────────────────────────────────────────────
   const range = billingCycleRange(month, 10);
   const cycleChargeDate     = range?.end ?? `${month}-10`;   // e.g. "2026-05-10"
@@ -200,10 +308,12 @@ export default async function TransactionsPage(props: {
   // ── Totals split by cycle ─────────────────────────────────────────────────
   // Current cycle = carry-over (date < monthStart) + days 1-10 (date <= cycleChargeDate)
   // Next cycle    = days 11+ (date > cycleChargeDate)
-  const currentCycleTxns = txns.filter(
+  // Includes projected installment payments so the user sees the full
+  // expected outflow, not just what's been imported so far.
+  const currentCycleTxns = txnsWithProjections.filter(
     (t) => String(t.date) <= cycleChargeDate,
   );
-  const nextCycleTxns = txns.filter(
+  const nextCycleTxns = txnsWithProjections.filter(
     (t) => String(t.date) > cycleChargeDate,
   );
 
@@ -374,7 +484,7 @@ export default async function TransactionsPage(props: {
       />
 
       <TransactionsList
-        transactions={txns.map((t) => ({
+        transactions={txnsWithProjections.map((t) => ({
           id: t.id,
           date: t.date,
           chargeDate: t.chargeDate,
@@ -399,6 +509,9 @@ export default async function TransactionsPage(props: {
           transferPairId:   t.transferPairId,
           importFilename:   t.importFilename,
           importCreatedAt:  t.importCreatedAt ? t.importCreatedAt.toISOString() : null,
+          // True for the synthesized projection rows; identifies them in
+          // the list so we can render with reduced opacity + "צפוי" badge.
+          isProjected:      String(t.id).startsWith('projected-'),
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}

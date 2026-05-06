@@ -92,6 +92,10 @@ export interface CellContext {
      *  entries (which already show the "ידני" badge). */
     importFilename?:  string | null;
     importCreatedAt?: string | null;
+    /** Synthesized projected installment payment — no real transaction yet.
+     *  Renders a "צפוי" badge so the user knows it's a forecast, not a
+     *  recorded charge. */
+    isProjected?: boolean;
   };
   cat: Cat | null;
   subCat: Cat | null;
@@ -157,10 +161,20 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     renderCell: ({ t }) => {
       const isForex = !!t.originalCurrency && t.originalCurrency !== 'ILS';
       const isTransfer = !!t.transferPairId;
-      if (!isForex && !isTransfer) return <>{t.merchant}</>;
+      const isProjected = !!t.isProjected;
+      if (!isForex && !isTransfer && !isProjected) return <>{t.merchant}</>;
       return (
         <div className="flex flex-wrap items-center gap-1.5">
           <span>{t.merchant}</span>
+          {isProjected && (
+            <span
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+              title="תשלום צפוי לפי תוכנית התשלומים — טרם נקלט בקובץ ייבוא"
+            >
+              <Clock className="size-2.5 shrink-0" />
+              צפוי
+            </span>
+          )}
           {isForex && (
             <span
               className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
