@@ -11,6 +11,7 @@ import { bulkDeleteTransactions, bulkApplyRule, bulkSetCategory } from './rule-a
 import { deleteTransaction } from './actions';
 import {
   ColumnsCustomizer,
+  ColumnResizeHandle,
   useColumnPrefs,
   type CellContext,
 } from './transactions-columns';
@@ -94,7 +95,7 @@ export function TransactionsList(props: {
   // "Columns" button. Persisted to localStorage. The leading checkbox
   // and trailing actions cells are NOT customizable; they're always-on
   // bookends rendered explicitly below.
-  const { prefs: colPrefs, visibleColumns, setOrder: setColOrder, setVisible: setColVisible, reset: resetCols } = useColumnPrefs();
+  const { prefs: colPrefs, visibleColumns, setOrder: setColOrder, setVisible: setColVisible, setWidth: setColWidth, reset: resetCols } = useColumnPrefs();
 
   // colSpan for full-width rows (section headers, "no transactions" message).
   // = visible data columns + 2 bookends (checkbox + actions).
@@ -223,9 +224,22 @@ export function TransactionsList(props: {
                 <th className="border-b px-2 py-2 w-8">
                   <input type="checkbox" checked={visible.length > 0 && visible.every((t) => selected.has(t.id))} onChange={(e) => toggleAll(e.target.checked)} aria-label="בחר הכל" />
                 </th>
-                {visibleColumns.map((col) => (
-                  <th key={col.id} className={col.headClass}>{col.label}</th>
-                ))}
+                {visibleColumns.map((col) => {
+                  const userWidth = colPrefs.widths[col.id];
+                  return (
+                    <th
+                      key={col.id}
+                      className={cn(col.headClass, 'relative')}
+                      style={userWidth ? { width: `${userWidth}px`, minWidth: `${userWidth}px`, maxWidth: `${userWidth}px` } : undefined}
+                    >
+                      {col.label}
+                      <ColumnResizeHandle
+                        onWidthChange={(next) => setColWidth(col.id, next)}
+                        onReset={() => setColWidth(col.id, null)}
+                      />
+                    </th>
+                  );
+                })}
                 {/* Action column header — also hosts the "עמודות" button so
                     the customizer is always reachable from the table chrome
                     itself, not from a separate toolbar above. */}
@@ -343,12 +357,20 @@ export function TransactionsList(props: {
                       </td>
 
                       {/* Customizable middle columns — render in user's
-                          chosen order, hiding ones they unchecked. */}
-                      {visibleColumns.map((col) => (
-                        <td key={col.id} className={col.cellClass}>
-                          {col.renderCell(cellCtx)}
-                        </td>
-                      ))}
+                          chosen order, hiding ones they unchecked.
+                          Width matches the user's drag-resized header. */}
+                      {visibleColumns.map((col) => {
+                        const userWidth = colPrefs.widths[col.id];
+                        return (
+                          <td
+                            key={col.id}
+                            className={col.cellClass}
+                            style={userWidth ? { width: `${userWidth}px`, minWidth: `${userWidth}px`, maxWidth: `${userWidth}px` } : undefined}
+                          >
+                            {col.renderCell(cellCtx)}
+                          </td>
+                        );
+                      })}
 
                       {/* Action buttons (always-on bookend) */}
                       <td className="px-3 py-2 align-top">

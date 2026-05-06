@@ -262,16 +262,9 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-1 flex-wrap">
             <span className="pill text-xs whitespace-nowrap" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
-            {/* Source badge — only INTERESTING sources get a badge:
-             *   • rule           → user-defined intent worth surfacing
-             *   • tagged_export  → file came pre-tagged (user trust signal)
-             *   • llm            → AI involvement worth flagging
-             * Hidden (since they're the default for any imported transaction
-             * and were just adding noise to most rows):
-             *   • bank_hint           (the bank's own ענף column)
-             *   • merchant_keyword    (heuristic keyword scan)
-             * The underlying source value is still stored in the DB for
-             * diagnostics — this just suppresses the badge.
+            {/* Source indicator — text label for INTENTIONAL sources, small
+             * icon-only dot for the auto-categorization fallbacks. Order
+             * matches priority (rule → tagged → bank-hint → keyword → llm).
              */}
             {isAutoRule && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" title={`כלל: ${t.ruleName ?? 'ללא שם'}`}>
@@ -283,14 +276,21 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
                 <UserCheck className="size-2.5" />תיוג ידני
               </span>
             )}
+            {isBankHint && (
+              <span className="inline-flex items-center justify-center size-4 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="קטגוריה לפי עמודת ענף של הבנק/חברת האשראי">
+                <Landmark className="size-2.5" />
+              </span>
+            )}
+            {isMerchantKeyword && (
+              <span className="inline-flex items-center justify-center size-4 rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="קטגוריה לפי מילת מפתח בשם בית העסק">
+                <Search className="size-2.5" />
+              </span>
+            )}
             {isLlm && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="הוצע על ידי AI">
                 <Sparkles className="size-2.5" />AI
               </span>
             )}
-            {/* Suppress unused-import warnings for the symbols we now hide. */}
-            {false && isBankHint && <Landmark className="hidden" />}
-            {false && isMerchantKeyword && <Search className="hidden" />}
           </div>
           {subCat && <span className="text-[11px] text-muted-foreground">↳ {subCat.nameHe}</span>}
         </div>
@@ -331,19 +331,27 @@ export const DEFAULT_ORDER: ColumnId[] = ['date', 'merchant', 'flag', 'account',
 
 // ─── Hook: load/save user prefs from localStorage ────────────────────────────
 
-const STORAGE_KEY = 'fba.tx-columns.v1';
+// v2 = added per-column widths. Old v1 keys are auto-migrated by sanitizing.
+const STORAGE_KEY = 'fba.tx-columns.v2';
+const LEGACY_STORAGE_KEY = 'fba.tx-columns.v1';
 
 interface ColumnPrefs {
-  order:   ColumnId[];                    // user's preferred order
-  visible: Record<ColumnId, boolean>;     // user's show/hide state
+  order:   ColumnId[];                          // user's preferred order
+  visible: Record<ColumnId, boolean>;           // user's show/hide state
+  widths:  Record<ColumnId, number | null>;     // px width per column; null = auto
 }
+
+const MIN_COL_WIDTH = 60;
+const MAX_COL_WIDTH = 800;
 
 function loadPrefs(): ColumnPrefs {
   if (typeof window === 'undefined') {
     return defaultPrefs();
   }
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_STORAGE_KEY); // migrate seamlessly
     if (!raw) return defaultPrefs();
     const parsed = JSON.parse(raw) as Partial<ColumnPrefs>;
     // Sanitize: drop unknown ids, fill in missing ones with defaults.
@@ -351,7 +359,13 @@ function loadPrefs(): ColumnPrefs {
     const order = (parsed.order ?? []).filter((id): id is ColumnId => known.has(id as ColumnId));
     for (const id of DEFAULT_ORDER) if (!order.includes(id)) order.push(id);
     const visible = { ...defaultPrefs().visible, ...(parsed.visible ?? {}) } as Record<ColumnId, boolean>;
-    return { order, visible };
+    const widths  = { ...defaultPrefs().widths,  ...(parsed.widths  ?? {}) } as Record<ColumnId, number | null>;
+    // Clamp any out-of-range widths
+    for (const id of DEFAULT_ORDER) {
+      const w = widths[id];
+      if (w !== null && (w < MIN_COL_WIDTH || w > MAX_COL_WIDTH)) widths[id] = null;
+    }
+    return { order, visible, widths };
   } catch {
     return defaultPrefs();
   }
@@ -359,8 +373,12 @@ function loadPrefs(): ColumnPrefs {
 
 function defaultPrefs(): ColumnPrefs {
   const visible = {} as Record<ColumnId, boolean>;
-  for (const id of DEFAULT_ORDER) visible[id] = COLUMN_DEFS[id].defaultVisible;
-  return { order: [...DEFAULT_ORDER], visible };
+  const widths  = {} as Record<ColumnId, number | null>;
+  for (const id of DEFAULT_ORDER) {
+    visible[id] = COLUMN_DEFS[id].defaultVisible;
+    widths[id]  = null;
+  }
+  return { order: [...DEFAULT_ORDER], visible, widths };
 }
 
 export function useColumnPrefs() {
@@ -387,8 +405,77 @@ export function useColumnPrefs() {
     visibleColumns,
     setOrder:   (order:   ColumnId[]) => setPrefs((p) => ({ ...p, order })),
     setVisible: (id: ColumnId, value: boolean) => setPrefs((p) => ({ ...p, visible: { ...p.visible, [id]: value } })),
+    setWidth:   (id: ColumnId, value: number | null) => setPrefs((p) => ({
+      ...p,
+      widths: {
+        ...p.widths,
+        [id]: value === null ? null : Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, Math.round(value))),
+      },
+    })),
     reset:      () => setPrefs(defaultPrefs()),
   };
+}
+
+// ─── Resize handle ────────────────────────────────────────────────────────────
+//
+// A 4-px-wide invisible drag strip on the right edge of every TH. On
+// mousedown it captures the pointer, listens to mousemove on the document,
+// and reports the new width back via onWidthChange. Double-click resets
+// the column to auto width.
+//
+// Why not a library: this is ~30 LOC with no external deps and works
+// perfectly with the existing colgroup/inline-width approach.
+//
+export function ColumnResizeHandle({
+  onWidthChange,
+  onReset,
+}: {
+  onWidthChange: (next: number) => void;
+  onReset: () => void;        // double-click → null (auto)
+}) {
+  const handleRef = useRef<HTMLDivElement>(null);
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Measure the parent TH's current rendered width — this is our
+    // starting baseline regardless of whether the user previously set a
+    // pixel width or it's still auto-sized.
+    const th = handleRef.current?.closest('th');
+    const startWidth = th ? th.getBoundingClientRect().width : 120;
+    const startX = e.clientX;
+    const isRtl = document.dir === 'rtl' || document.documentElement.dir === 'rtl';
+
+    const move = (ev: PointerEvent) => {
+      const delta = ev.clientX - startX;
+      // In RTL, the resize handle sits on the visible LEFT edge of the
+      // header cell. Dragging the mouse LEFT (negative deltaX) makes the
+      // column WIDER. So invert the sign in RTL.
+      const next = startWidth + (isRtl ? -delta : delta);
+      onWidthChange(next);
+    };
+    const up = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  return (
+    <div
+      ref={handleRef}
+      onPointerDown={onPointerDown}
+      onDoubleClick={onReset}
+      className="absolute top-0 bottom-0 -start-1 w-2 cursor-col-resize select-none touch-none hover:bg-primary/30 active:bg-primary/60"
+      title="גרור כדי לשנות רוחב, דאבל-קליק לאיפוס"
+      aria-label="שנה רוחב עמודה"
+    />
+  );
 }
 
 // ─── Customizer modal ─────────────────────────────────────────────────────────
