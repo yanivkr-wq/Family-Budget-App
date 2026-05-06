@@ -169,10 +169,16 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
           {isProjected && (
             <span
               className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
-              title="תשלום צפוי לפי תוכנית התשלומים — טרם נקלט בקובץ ייבוא"
+              title={
+                'תחזית של האפליקציה — לא חיוב אמיתי. ' +
+                'נוצר אוטומטית מתוך תוכנית התשלומים שמופיעה בעמוד תשלומים. ' +
+                'כשתעלה את חיובי החודש הבא, השורה הזו תוחלף בתנועה האמיתית. ' +
+                'מטרת התחזית: שתראה את כל ההוצאות הצפויות בקופה החודשית מראש.'
+              }
             >
               <Clock className="size-2.5 shrink-0" />
               צפוי
+              <span aria-hidden className="ms-0.5 inline-flex size-3 items-center justify-center rounded-full bg-amber-200/80 text-[8px] font-bold text-amber-800 dark:bg-amber-800/40 dark:text-amber-200">i</span>
             </span>
           )}
           {isForex && (

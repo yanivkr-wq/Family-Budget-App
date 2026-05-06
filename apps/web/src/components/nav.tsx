@@ -50,6 +50,7 @@ const LINKS: NavLink[] = [
   { href: '/admin/imports', label: 'היסטוריית ייבוא', icon: History, group: 'admin' },
   { href: '/admin/feedback', label: 'פידבק', icon: MessageSquare, group: 'admin' },
   { href: '/admin/audit', label: he.nav.audit, icon: ScrollText, group: 'admin' },
+  { href: '/admin/rules-catalog', label: 'ספר החוקים', icon: ScrollText, group: 'admin' },
   { href: '/admin/privacy', label: 'יומן פרטיות', icon: Shield, group: 'admin' },
   { href: '/settings/password', label: 'סיסמה', icon: KeyRound, group: 'admin' },
 ];
