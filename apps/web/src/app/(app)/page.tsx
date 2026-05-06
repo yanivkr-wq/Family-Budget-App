@@ -792,30 +792,32 @@ export default async function DashboardPage(props: {
                       <p className="mb-1.5 text-xs font-medium text-muted-foreground">
                         ההוצאות הגדולות ביותר
                       </p>
+                      {/* 3-column grid: merchant | category | amount.
+                          The category column has a fixed width so all
+                          badges line up vertically across rows, matching
+                          the user's request. */}
                       <ul className="divide-y rounded-md border">
                         {topRecurringExpenses.map((p) => {
                           const cat = p.categoryId ? catMap.get(p.categoryId) : null;
                           return (
-                            <li key={p.merchantNormalized} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
-                              <div className="flex min-w-0 flex-col">
-                                <div className="flex items-center gap-2">
-                                  <span className="truncate font-medium">{p.merchantNormalized}</span>
-                                  {cat && (
-                                    <span
-                                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                                      style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
-                                    >
-                                      {cat.nameHe}
-                                    </span>
-                                  )}
-                                </div>
+                            <li key={p.merchantNormalized} className="grid grid-cols-[1fr_minmax(5rem,auto)_auto] items-center gap-2 px-3 py-1.5 text-sm">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{p.merchantNormalized}</div>
                                 {p.description && (
-                                  <span className="truncate text-[11px] text-muted-foreground" title={p.description}>
+                                  <div className="truncate text-[11px] text-muted-foreground" title={p.description}>
                                     {p.description}
-                                  </span>
+                                  </div>
                                 )}
                               </div>
-                              <span className="shrink-0 font-semibold tabular-nums">
+                              {cat ? (
+                                <span
+                                  className="justify-self-end inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap"
+                                  style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}
+                                >
+                                  {cat.nameHe}
+                                </span>
+                              ) : <span />}
+                              <span className="shrink-0 font-semibold tabular-nums justify-self-end">
                                 {formatIls(Math.abs(p.monthly), { decimals: false })}
                               </span>
                             </li>
@@ -1095,33 +1097,46 @@ function computeInsights(args: {
   }
 
   // ⑥ Installment plans ending this month or next
+  // Skip the insight when we've only observed the FIRST payment (or
+  // anything earlier than second-to-last). Reaching the projected end
+  // date by calendar without having actually recorded the matching
+  // number of payments means imports are incomplete — telling the user
+  // "ending this month" when they're at payment 1/4 is misleading.
   const nextMonth = addMonths(month, 1);
   for (const plan of endingPlans) {
     const end = plan.projectedEndMonth;
     if (!end) continue;
     const endingThisMonth = end === month;
     const endingNextMonth = end === nextMonth;
-    if (endingThisMonth || endingNextMonth) {
-      const name = plan.description ?? plan.merchantNormalized;
-      insights.push({
-        id: `ending-soon-${plan.id}`,
-        severity: 'info',
-        icon: 'PartyPopper',
-        title: `"${name}" ${endingThisMonth ? 'מסתיים החודש' : 'מסתיים בחודש הבא'}`,
-        body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}`,
-        explanation:
-          `בדקתי תאריכי סיום צפויים של תוכניות תשלומים פעילות.\n` +
-          `\n` +
-          `• תוכנית: "${name}"\n` +
-          `• תשלום ${plan.currentPaymentNo}${plan.totalPayments ? ` מתוך ${plan.totalPayments}` : ''}\n` +
-          `• תשלום חודשי: ${ils(Math.abs(Number(plan.paymentAmountIls)))}\n` +
-          `• תאריך סיום צפוי: ${end}\n` +
-          `• חודש נוכחי: ${month}\n` +
-          `\n` +
-          `אחרי שהתוכנית תסתיים, ${ils(Math.abs(Number(plan.paymentAmountIls)))} ייפנו בכל חודש — הזדמנות מצוינת להוסיף ליעד חיסכון.`,
-        href: '/installments',
-      });
+    if (!(endingThisMonth || endingNextMonth)) continue;
+
+    // Only fire when we're actually on the last or second-to-last
+    // recorded payment. Without totalPayments we can't tell, so keep
+    // firing (rare case for plans the user added manually w/o total).
+    if (plan.totalPayments && plan.currentPaymentNo < plan.totalPayments - 1) {
+      continue;
     }
+
+    const name = plan.description ?? plan.merchantNormalized;
+    const isLastObserved = plan.totalPayments && plan.currentPaymentNo === plan.totalPayments;
+    insights.push({
+      id: `ending-soon-${plan.id}`,
+      severity: 'info',
+      icon: 'PartyPopper',
+      title: `"${name}" ${endingThisMonth ? 'מסתיים החודש' : 'מסתיים בחודש הבא'}`,
+      body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}${isLastObserved ? ' (הושלם)' : ''}`,
+      explanation:
+        `בדקתי תאריכי סיום צפויים של תוכניות תשלומים פעילות.\n` +
+        `\n` +
+        `• תוכנית: "${name}"\n` +
+        `• תשלום אחרון שנקלט: ${plan.currentPaymentNo}${plan.totalPayments ? ` מתוך ${plan.totalPayments}` : ''}\n` +
+        `• תשלום חודשי: ${ils(Math.abs(Number(plan.paymentAmountIls)))}\n` +
+        `• תאריך סיום צפוי: ${end}\n` +
+        `• חודש נוכחי: ${month}\n` +
+        `\n` +
+        `אחרי שהתוכנית תסתיים, ${ils(Math.abs(Number(plan.paymentAmountIls)))} ייפנו בכל חודש — הזדמנות מצוינת להוסיף ליעד חיסכון.`,
+      href: '/installments',
+    });
   }
 
   // ⑦ No income recorded past day 10 of current month

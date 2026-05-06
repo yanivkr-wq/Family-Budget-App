@@ -35,9 +35,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </aside>
 
-        {/* Main content */}
+        {/* Main content
+         *
+         * max-w bumps with viewport so wide monitors don't waste space:
+         *   • base   → 7xl (1280px)
+         *   • xl     → no cap (let it use the full main area)
+         * The aside sidebar is fixed at w-64 (256px), so on a 1920px
+         * monitor this gives us ~1664px of usable width for tables. */}
         <main className="flex-1 overflow-x-hidden pb-20 md:pb-0">
-          <div className="mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-8 lg:px-8">
+          <div className="mx-auto max-w-7xl xl:max-w-none px-4 py-5 md:px-6 md:py-8 lg:px-8">
             {children}
           </div>
         </main>
