@@ -130,6 +130,11 @@ export default async function TransactionsPage(props: {
       // Transfer-pair link — when set, this row pairs with another in a
       // different account (cross-account transfer; cancels out in cash flow).
       transferPairId: schema.transactions.transferPairId,
+      // Provenance: which file did this row come from + when. Surfaced
+      // in the "ייבוא" badge tooltip on /transactions so the user can
+      // trace any imported row back to the upload that produced it.
+      importFilename:  schema.importSessions.filename,
+      importCreatedAt: schema.importSessions.committedAt,
     })
     .from(schema.transactions)
     .leftJoin(
@@ -139,6 +144,10 @@ export default async function TransactionsPage(props: {
     .leftJoin(
       schema.installmentPlans,
       eq(schema.transactions.installmentPlanId, schema.installmentPlans.id),
+    )
+    .leftJoin(
+      schema.importSessions,
+      eq(schema.transactions.importSessionId, schema.importSessions.id),
     )
     .leftJoin(
       schema.recurringPatterns,
@@ -388,6 +397,8 @@ export default async function TransactionsPage(props: {
           originalAmount:   t.originalAmount !== null ? Number(t.originalAmount) : null,
           originalCurrency: t.originalCurrency,
           transferPairId:   t.transferPairId,
+          importFilename:   t.importFilename,
+          importCreatedAt:  t.importCreatedAt ? t.importCreatedAt.toISOString() : null,
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}

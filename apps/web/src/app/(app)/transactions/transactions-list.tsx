@@ -6,6 +6,8 @@ import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settin
 import { cn } from '@/lib/utils';
 import { RuleModal } from './rule-modal';
 import { EditTransactionModal } from './edit-modal';
+import { RecurringModal, type RecurringPrefill } from '../recurring/recurring-modal';
+import { InstallmentModal, type InstallmentPrefill } from '../installments/installment-modal';
 import { TransactionsFilter, emptyFilter, isFilterActive, type FilterState } from './transactions-filter';
 import { bulkDeleteTransactions, bulkApplyRule, bulkSetCategory } from './rule-actions';
 import { deleteTransaction } from './actions';
@@ -85,6 +87,12 @@ export function TransactionsList(props: {
   const [selected, setSelected]         = useState<Set<string>>(new Set());
   const [ruleModalForId, setRuleModalForId] = useState<string | null>(null);
   const [editTxnId, setEditTxnId]       = useState<string | null>(null);
+  // Per-row "mark as ..." quick actions: open a pre-filled create modal
+  // for either /recurring or /installments using the transaction's data
+  // (merchant name, amount, account). Saves the user from navigating
+  // away to those pages just to add one entry.
+  const [markRecurringPrefill, setMarkRecurringPrefill] = useState<RecurringPrefill | null>(null);
+  const [markInstallmentPrefill, setMarkInstallmentPrefill] = useState<InstallmentPrefill | null>(null);
   const [filter, setFilter]             = useState<FilterState>(emptyFilter);
   const [bulkCatId, setBulkCatId]       = useState('');
   const [bulkRuleId, setBulkRuleId]     = useState('');
@@ -218,11 +226,20 @@ export function TransactionsList(props: {
 
       {props.transactions.length > 0 && (
         <section className="rounded-lg border bg-card">
-          <table className="min-w-full text-sm">
-            <thead className="bg-muted/40 text-right">
+          {/* On screens >=lg the cells switch to whitespace-nowrap so wide
+              monitors actually USE the horizontal real estate instead of
+              wrapping Hebrew text mid-column. notes column still truncates
+              by design — it can be very long. */}
+          <table className="min-w-full text-sm [&_tbody_td]:lg:whitespace-nowrap">
+            {/* Sticky header: stays visible while you scroll long lists.
+                top-0 anchors to the scrollport top; z-20 keeps it above
+                the section dividers; bg-muted/95 keeps it readable. */}
+            <thead className="sticky top-0 z-20 bg-muted/95 text-right shadow-sm backdrop-blur">
               <tr>
-                <th className="border-b px-2 py-2 w-8">
-                  <input type="checkbox" checked={visible.length > 0 && visible.every((t) => selected.has(t.id))} onChange={(e) => toggleAll(e.target.checked)} aria-label="בחר הכל" />
+                <th className="border-b px-2 py-2 w-8 align-middle">
+                  <div className="flex items-center justify-center">
+                    <input type="checkbox" checked={visible.length > 0 && visible.every((t) => selected.has(t.id))} onChange={(e) => toggleAll(e.target.checked)} aria-label="בחר הכל" />
+                  </div>
                 </th>
                 {visibleColumns.map((col) => {
                   const userWidth = colPrefs.widths[col.id];
@@ -351,9 +368,12 @@ export function TransactionsList(props: {
                         isInstallment && 'border-r-2 border-r-primary/60',
                       )}
                     >
-                      {/* Selection checkbox (always-on bookend) */}
-                      <td className="px-2 py-2 align-top">
-                        <input type="checkbox" checked={isSelected} onChange={(e) => toggleOne(t.id, e.target.checked)} />
+                      {/* Selection checkbox (always-on bookend) — vertically
+                          centered with the row content, matching the header. */}
+                      <td className="px-2 py-2 align-middle">
+                        <div className="flex items-center justify-center">
+                          <input type="checkbox" checked={isSelected} onChange={(e) => toggleOne(t.id, e.target.checked)} />
+                        </div>
                       </td>
 
                       {/* Customizable middle columns — render in user's
@@ -373,7 +393,7 @@ export function TransactionsList(props: {
                       })}
 
                       {/* Action buttons (always-on bookend) */}
-                      <td className="px-3 py-2 align-top">
+                      <td className="px-3 py-2 align-middle">
                         <div className="flex items-center justify-end gap-1">
                           <button type="button" onClick={() => setEditTxnId(t.id)} className="rounded-md p-1.5 text-foreground/70 hover:bg-accent/40" title="ערוך תנועה" aria-label="ערוך תנועה">
                             <Pencil className="size-3.5" />
@@ -381,6 +401,44 @@ export function TransactionsList(props: {
                           <button type="button" onClick={() => setRuleModalForId(t.id)} className="rounded-md p-1.5 text-accent hover:bg-accent-soft" title="כללים לתנועה זו" aria-label="פתח כללים">
                             <Sparkles className="size-3.5" />
                           </button>
+                          {/* Quick "mark as recurring" — pre-fills the
+                              create modal with this transaction's data,
+                              avoiding a navigation to /recurring. Only
+                              shown for non-recurring rows. */}
+                          {!t.recurringPatternId && (
+                            <button
+                              type="button"
+                              onClick={() => setMarkRecurringPrefill({
+                                merchant:   t.merchant,
+                                amount:     Math.abs(t.amount),
+                                sign:       t.amount < 0 ? 'expense' : 'income',
+                                categoryId: t.categoryId ?? null,
+                              })}
+                              className="rounded-md p-1.5 text-primary hover:bg-primary/10"
+                              title="סמן בית עסק זה כהוצאה/הכנסה קבועה"
+                              aria-label="סמן כקבוע"
+                            >
+                              <Repeat className="size-3.5" />
+                            </button>
+                          )}
+                          {/* Quick "mark as installment" — same pattern
+                              with the installments modal. Hidden for
+                              rows already linked to a plan. */}
+                          {!t.installmentPlanId && (
+                            <button
+                              type="button"
+                              onClick={() => setMarkInstallmentPrefill({
+                                merchant:  t.merchant,
+                                amount:    Math.abs(t.amount),
+                                accountId: t.accountId,
+                              })}
+                              className="rounded-md p-1.5 text-primary hover:bg-primary/10"
+                              title="צור תוכנית תשלומים מהתנועה הזו"
+                              aria-label="סמן כתשלום"
+                            >
+                              <CreditCard className="size-3.5" />
+                            </button>
+                          )}
                           <button type="button" onClick={() => deleteOne(t.id)} disabled={isPending} className="rounded-md p-1.5 text-destructive hover:bg-destructive/10" title="מחק">
                             <Trash2 className="size-3.5" />
                           </button>
@@ -555,6 +613,26 @@ export function TransactionsList(props: {
           />
         );
       })()}
+
+      {/* Per-row "mark as recurring" — pre-filled create modal */}
+      {markRecurringPrefill && (
+        <RecurringModal
+          pattern={null}
+          prefill={markRecurringPrefill}
+          categories={props.categories.map((c) => ({ id: c.id, nameHe: c.nameHe }))}
+          onClose={() => setMarkRecurringPrefill(null)}
+        />
+      )}
+
+      {/* Per-row "mark as installment" — pre-filled create modal */}
+      {markInstallmentPrefill && (
+        <InstallmentModal
+          plan={null}
+          prefill={markInstallmentPrefill}
+          accounts={props.accounts.map((a) => ({ id: a.id, name: a.name }))}
+          onClose={() => setMarkInstallmentPrefill(null)}
+        />
+      )}
 
       {columnsOpen && (
         <ColumnsCustomizer

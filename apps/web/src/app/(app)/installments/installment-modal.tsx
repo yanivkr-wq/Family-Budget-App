@@ -23,8 +23,16 @@ export interface InstallmentPlanRow {
 
 interface Account { id: string; name: string }
 
+export interface InstallmentPrefill {
+  merchant?:    string;
+  description?: string;
+  amount?:      number;             // unsigned magnitude (per-payment)
+  accountId?:   string | null;
+}
+
 interface Props {
   plan?: InstallmentPlanRow | null;   // null → create mode
+  prefill?: InstallmentPrefill;       // seed values for create mode
   accounts: Account[];
   onClose: () => void;
 }
@@ -52,7 +60,7 @@ function formatMonthHe(ym: string) {
 // Modal
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function InstallmentModal({ plan, accounts, onClose }: Props) {
+export function InstallmentModal({ plan, prefill, accounts, onClose }: Props) {
   const isEdit = !!plan;
   const [error, setError]         = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -62,13 +70,16 @@ export function InstallmentModal({ plan, accounts, onClose }: Props) {
   // description = a friendly label the user types (e.g., "iPhone 15 Pro").
   // Description is OPTIONAL — when blank we display merchant in the table.
   const nowMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const [merchant,    setMerchant]    = useState(plan?.merchantNormalized ?? '');
-  const [description, setDescription] = useState(plan?.description ?? '');
-  const [amount,      setAmount]      = useState(plan ? String(Math.abs(Number(plan.paymentAmountIls))) : '');
+  const [merchant,    setMerchant]    = useState(plan?.merchantNormalized ?? prefill?.merchant ?? '');
+  const [description, setDescription] = useState(plan?.description ?? prefill?.description ?? '');
+  const [amount,      setAmount]      = useState(
+    plan ? String(Math.abs(Number(plan.paymentAmountIls))) :
+    prefill?.amount ? String(prefill.amount) : '',
+  );
   const [total,       setTotal]       = useState(plan?.totalPayments ? String(plan.totalPayments) : '');
   const [currentNo,   setCurrentNo]   = useState(plan ? String(plan.currentPaymentNo) : '1');
   const [startMonth,  setStartMonth]  = useState(plan?.startMonth ?? nowMonth);
-  const [accountId,   setAccountId]   = useState(plan?.accountId ?? '');
+  const [accountId,   setAccountId]   = useState(plan?.accountId ?? prefill?.accountId ?? '');
   const [status,      setStatus]      = useState<'active'|'complete'|'cancelled'>(plan?.status ?? 'active');
   const [notes,       setNotes]       = useState(plan?.notes ?? '');
 

@@ -37,7 +37,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock, Globe2, ArrowLeftRight, Landmark, Search, UserCheck } from 'lucide-react';
+import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock, Globe2, ArrowLeftRight, UserCheck } from 'lucide-react';
 import { formatIls, formatDateHe } from '@fba/shared';
 import { cn } from '@/lib/utils';
 
@@ -86,6 +86,12 @@ export interface CellContext {
      *  transfer pair. Renders a small "↔" badge so the user knows the row
      *  cancels with another in the dataset. */
     transferPairId?: string | null;
+    /** Source-import provenance — which file produced this row + when.
+     *  Surfaced in the "ייבוא" badge tooltip so the user can trace any
+     *  imported transaction back to its upload. Both null for manual
+     *  entries (which already show the "ידני" badge). */
+    importFilename?:  string | null;
+    importCreatedAt?: string | null;
   };
   cat: Cat | null;
   subCat: Cat | null;
@@ -240,17 +246,34 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     label: 'מקור',
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
-    cellClass: 'px-3 py-2 align-top',
-    renderCell: ({ txIsManual }) =>
-      txIsManual ? (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="הוזן ידנית">
-          <User className="size-2.5" />ידני
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" title="יובא מקובץ / אוטומטי">
+    cellClass: 'px-3 py-2 align-middle',
+    // Imported rows show the import session's filename + date in the
+    // hover tooltip so the user can trace each row back to its upload.
+    renderCell: ({ txIsManual, t }) => {
+      if (txIsManual) {
+        return (
+          <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="הוזן ידנית">
+            <User className="size-2.5" />ידני
+          </span>
+        );
+      }
+      // Build a multi-line tooltip with file + date when available.
+      let tooltip = 'יובא מקובץ / אוטומטי';
+      if (t.importFilename) {
+        const dateStr = t.importCreatedAt
+          ? new Date(t.importCreatedAt).toLocaleDateString('he-IL', {
+              year: 'numeric', month: '2-digit', day: '2-digit',
+              hour: '2-digit', minute: '2-digit',
+            })
+          : '';
+        tooltip = `קובץ: ${t.importFilename}${dateStr ? `\nיובא: ${dateStr}` : ''}`;
+      }
+      return (
+        <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" title={tooltip}>
           <Upload className="size-2.5" />ייבוא
         </span>
-      ),
+      );
+    },
   },
 
   category: {
@@ -307,30 +330,32 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     label: 'כלל',
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
-    cellClass: 'px-3 py-2 align-top',
-    // Source-of-categorization indicator. Real user rules get a clickable
-    // pill linking to /admin/rules?edit=<id> (which auto-opens the edit
-    // modal). Auto-categorization sources show a small icon-only dot for
-    // diagnostic purposes — they're not editable from here, but you can
-    // see at a glance HOW each transaction got its category.
-    renderCell: ({ t, isAutoRule, isBankHint, isMerchantKeyword, isTaggedExport, isLlm }) => {
+    cellClass: 'px-3 py-2 align-middle',
+    // Compact source-of-categorization indicator:
+    //   • User rule       → clickable "כלל" pill, hover shows rule name,
+    //                       click navigates to /admin/rules?edit=<id>
+    //   • tagged_export   → "תיוג ידני" pill (file-supplied)
+    //   • llm             → "AI" pill
+    //   • bank_hint /     → no badge (the categorization happened, the
+    //     merchant_keyword   user doesn't need a per-row noise indicator)
+    renderCell: ({ t, isAutoRule, isTaggedExport, isLlm, isBankHint, isMerchantKeyword }) => {
+      void isBankHint; void isMerchantKeyword; // intentionally not rendered
       if (isAutoRule && t.appliedRuleId) {
         return (
           <Link
             href={`/admin/rules?edit=${t.appliedRuleId}`}
             onClick={(e) => e.stopPropagation()}
             className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-200 dark:bg-sky-900/40 dark:text-sky-300"
-            title={`לחץ כדי לערוך את הכלל: ${t.ruleName ?? ''}`}
+            title={t.ruleName ? `כלל: ${t.ruleName} (לחץ לעריכה)` : 'לחץ לעריכת הכלל'}
           >
-            <Zap className="size-2.5" />
-            <span className="max-w-[12rem] truncate">{t.ruleName ?? 'כלל'}</span>
+            <Zap className="size-2.5" />כלל
           </Link>
         );
       }
       if (isTaggedExport) {
         return (
           <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" title="קטגוריה הגיעה מהקובץ עצמו (תיוג ידני בקובץ המקור)">
-            <UserCheck className="size-2.5" />תיוג ידני
+            <UserCheck className="size-2.5" />תיוג
           </span>
         );
       }
@@ -341,21 +366,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
           </span>
         );
       }
-      if (isBankHint) {
-        return (
-          <span className="inline-flex items-center justify-center size-5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="קטגוריה לפי עמודת ענף של הבנק/חברת האשראי">
-            <Landmark className="size-3" />
-          </span>
-        );
-      }
-      if (isMerchantKeyword) {
-        return (
-          <span className="inline-flex items-center justify-center size-5 rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="קטגוריה לפי מילת מפתח בשם בית העסק">
-            <Search className="size-3" />
-          </span>
-        );
-      }
-      return <span className="text-muted-foreground">—</span>;
+      return <span className="text-muted-foreground/50 text-xs">—</span>;
     },
   },
 };

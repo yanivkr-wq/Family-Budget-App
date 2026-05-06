@@ -38,22 +38,36 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'ended',  label: 'הסתיים' },
 ];
 
+export interface RecurringPrefill {
+  merchant?:    string;
+  description?: string;
+  amount?:      number;             // unsigned magnitude
+  sign?:        'expense' | 'income';
+  categoryId?:  string | null;
+}
+
 export function RecurringModal({
   pattern,
+  prefill,
   categories,
   onClose,
 }: {
   pattern: RecurringPatternRow | null; // null = create mode
+  prefill?: RecurringPrefill;          // optional seed values for create mode
   categories: Cat[];
   onClose: () => void;
 }) {
   const isEdit = !!pattern;
-  const initialAmount = pattern ? Math.abs(Number(pattern.expectedAmountIls)) : 0;
-  const initialSign: 'expense' | 'income' = pattern && Number(pattern.expectedAmountIls) > 0 ? 'income' : 'expense';
+  const initialAmount = pattern
+    ? Math.abs(Number(pattern.expectedAmountIls))
+    : (prefill?.amount ?? 0);
+  const initialSign: 'expense' | 'income' = pattern
+    ? (Number(pattern.expectedAmountIls) > 0 ? 'income' : 'expense')
+    : (prefill?.sign ?? 'expense');
 
-  const [merchant, setMerchant] = useState(pattern?.merchantNormalized ?? '');
-  const [description, setDescription] = useState(pattern?.description ?? '');
-  const [categoryId, setCategoryId] = useState(pattern?.categoryId ?? '');
+  const [merchant, setMerchant] = useState(pattern?.merchantNormalized ?? prefill?.merchant ?? '');
+  const [description, setDescription] = useState(pattern?.description ?? prefill?.description ?? '');
+  const [categoryId, setCategoryId] = useState(pattern?.categoryId ?? prefill?.categoryId ?? '');
   const [amountMode, setAmountMode] = useState<'fixed' | 'range' | 'dynamic'>(
     (pattern?.amountMode as 'fixed' | 'range' | 'dynamic') ?? 'fixed',
   );
