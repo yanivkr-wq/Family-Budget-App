@@ -1109,6 +1109,15 @@ export interface BankExportImportResult {
    *  "דלק מנטה קמעונאות..." where the bank didn't fill ענף but the merchant
    *  name itself contains a strong category keyword. */
   merchantKeywordCategorized: number;
+  /** Rows whose categoryHint exactly matched one of the household's
+   *  category names (used by the `tagged-export` template). Highest-quality
+   *  signal because the user pre-tagged the file. */
+  taggedExportCategorized: number;
+  /** Recurring-pattern rows auto-created from the file's חוזר flag. */
+  recurringPatternsCreated: number;
+  /** Transactions flagged as inter-account transfers via the file's
+   *  "העברה בין חשבונות" column. */
+  transferRows: number;
   /** Installment plans auto-created during this import (didn't exist before). */
   newPlansCreated:   number;
   /** Rows linked to an installment plan (newly created OR pre-existing). */
@@ -1150,71 +1159,64 @@ function hashRowId(date: string, chargeDate: string | null, amount: number, merc
  */
 const BANK_HINT_TO_OUR_CATEGORY: Array<{ pattern: RegExp; targets: string[] }> = [
   // Restaurants & cafes  → "מסעדות וקפה"
-  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות|מזנון|פיצריות?|המבורגר/i,
+  // Discount-Key uses "מסעדות, קפה וברים", Diners/Visa uses just "מסעדות"
+  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות|מזנון|פיצריות?|המבורגר|קפה\s*וברים|קפה/i,
     targets: ['מסעדות וקפה', 'מסעדות', 'אוכל בחוץ', 'אוכל'] },
   // Groceries  → "מכולת ומזון"
-  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן|בשר|קצב/i,
+  // Discount-Key uses "מזון וצריכה", Visa uses "מזון ומשקאות"
+  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן|בשר|קצב|צריכה|משקאות/i,
     targets: ['מכולת ומזון', 'מכולת', 'סופר', 'מזון', 'קניות מזון', 'סופרמרקט', 'מצרכים'] },
-  // Fuel / car  → "תחבורה"
-  { pattern: /דלק|תדלוק|בנזין/i,
+  // Fuel — Discount/Visa label these as "אנרגיה" (!), Diners as "רכב ותחבורה"
+  { pattern: /דלק|תדלוק|בנזין|אנרגיה/i,
     targets: ['תחבורה', 'דלק', 'רכב'] },
-  // Vehicle (non-fuel)  → "תחבורה"
-  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6|פנגו|טסט/i,
+  // Vehicle / transport  → "תחבורה"
+  // Discount-Key: "תחבורה ורכבים", Diners: "רכב ותחבורה"
+  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6|פנגו|טסט|תחבורה|רכבת|אוטובוס|רב\s*קו|מונית|גט/i,
     targets: ['תחבורה', 'רכב', 'הוצאות רכב'] },
-  // Public transport  → "תחבורה"
-  { pattern: /תחבורה|רכבת|אוטובוס|רב\s*קו|מונית|גט/i,
-    targets: ['תחבורה', 'תחבורה ציבורית'] },
-  // Utilities / household bills  → "בית ומשק"
-  { pattern: /חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר|חברת\s*חשמל|חשבונית/i,
-    targets: ['בית ומשק', 'חשבונות', 'שירותים', 'בית', 'דיור'] },
-  // Communications  → "תקשורת"
-  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה|פלאפון|פרטנר|הוט|בזק|סלקום|yes/i,
+  // Communications & tech  → "תקשורת"
+  // Discount-Key: "שירותי תקשורת", Diners/Visa: "תקשורת ומחשבים"
+  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה|פלאפון|פרטנר|הוט|בזק|סלקום|yes|מחשבים/i,
     targets: ['תקשורת', 'תקשורת וטלוויזיה'] },
-  // Insurance  → "הלוואות וחיסכון" (closest catch-all in their setup)
-  { pattern: /ביטוח/i,
-    targets: ['ביטוח', 'ביטוחים', 'הלוואות וחיסכון'] },
-  // Loans / savings / financial  → "הלוואות וחיסכון"
-  { pattern: /הלוואה|הלוואת|משכנתא|חיסכון|הפקדה|השקעה|קרן|קופת\s*גמל|בנק/i,
+  // Insurance / finance  → "הלוואות וחיסכון"
+  // Discount-Key: "ביטוח", Diners/Visa: "ביטוח ופיננסים"
+  { pattern: /ביטוח|פיננסים/i,
+    targets: ['הלוואות וחיסכון', 'ביטוח', 'ביטוחים'] },
+  // Loans / savings / mortgage  → "הלוואות וחיסכון"
+  { pattern: /הלוואה|הלוואת|משכנתא|חיסכון|הפקדה|השקעה|קרן|קופת\s*גמל/i,
     targets: ['הלוואות וחיסכון', 'הלוואות', 'חיסכון'] },
   // Health / pharmacy  → "בריאות"
+  // Discount-Key: "רפואה ובתי מרקחת", Visa: "רפואה ובריאות"
   { pattern: /בריאות|רפואה|רוקחות|בית\s*מרקחת|פארם|רופא|קופ.?ח|סופר[-\s]פארם|קופת\s*חולים/i,
     targets: ['בריאות', 'רפואה'] },
-  // Clothing / fashion  → "אחר" (no dedicated category)
-  { pattern: /ביגוד|אופנה|בגדים|הנעלה|נעליים/i,
-    targets: ['ביגוד', 'ביגוד והנעלה', 'אופנה', 'אחר'] },
-  // Beauty / personal  → "אחר"
-  { pattern: /יופי|טיפוח|קוסמטיקה|מספרה|ספא/i,
-    targets: ['טיפוח', 'יופי', 'אישי', 'אחר'] },
   // Entertainment / leisure  → "בילוי ופנאי"
-  { pattern: /בידור|פנאי|תרבות|קולנוע|תיאטרון|הופעה|מנוי|סטרימינג|נטפליקס|ספוטיפיי|spotify|netflix|youtube|disney|חדר\s*בריחה|spa/i,
+  // Discount-Key: "פנאי, בידור וספורט", Visa: "פנאי בילוי"
+  { pattern: /בידור|פנאי|תרבות|קולנוע|תיאטרון|הופעה|מנוי|סטרימינג|נטפליקס|ספוטיפיי|spotify|netflix|youtube|disney|חדר\s*בריחה|spa|ספורט|בילוי/i,
     targets: ['בילוי ופנאי', 'בילוי', 'בידור', 'פנאי', 'בילויים'] },
   // Travel / vacation  → "נסיעות וחופשות"
+  // Diners: "תיירות"
   { pattern: /חופשה|נסיעות|תיירות|טיסות|מלון|חו["'״]?ל|airbnb|booking|expedia|airline/i,
     targets: ['נסיעות וחופשות', 'טיולים', 'חופשות', 'נסיעות', 'נופש'] },
-  // Education  → "ילדים וחינוך"
-  { pattern: /חינוך|לימודים|בית\s*ספר|גן\s*ילדים|חוגים|ספרים|אוניברס|מכללה|גן/i,
-    targets: ['ילדים וחינוך', 'חינוך', 'לימודים'] },
-  // Kids  → "ילדים וחינוך"
-  { pattern: /ילדים|תינוק|צעצועים|פעוטון|קייטנה/i,
-    targets: ['ילדים וחינוך', 'ילדים', 'משפחה'] },
-  // Home goods / furniture  → "בית ומשק"
-  { pattern: /ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים|איקאה|ace|הום\s*סנטר/i,
+  // Home / furniture / household  → "בית ומשק"
+  // Discount-Key: "עיצוב הבית", Diners/Visa: "ריהוט ובית"
+  { pattern: /ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים|איקאה|ace|הום\s*סנטר|עיצוב\s*הבית|בית/i,
     targets: ['בית ומשק', 'בית', 'דיור', 'ריהוט'] },
-  // Electronics / tech  → "אחר"
-  { pattern: /אלקטרוניקה|מחשבים|טכנולוגיה|מוצרי\s*חשמל|ksp|איי-דיגיטל/i,
-    targets: ['אלקטרוניקה', 'טכנולוגיה', 'אחר'] },
-  // Charity  → "אחר"
-  { pattern: /צדקה|תרומה|תרומות/i,
-    targets: ['צדקה', 'תרומות', 'אחר'] },
-  // Pets  → "אחר"
-  { pattern: /חיות\s*מחמד|וטרינר|כלב|חתול/i,
-    targets: ['חיות מחמד', 'בעלי חיים', 'אחר'] },
-  // ATM / cash withdrawals  → "כספומט"
+  // Government / municipal bills  → "בית ומשק"
+  // Discount-Key: "עירייה וממשלה" (catches arnona, water, etc.)
+  { pattern: /עירייה|ממשלה|חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר|חברת\s*חשמל|חשבונית/i,
+    targets: ['בית ומשק', 'חשבונות', 'שירותים', 'בית'] },
+  // Education  → "ילדים וחינוך"
+  { pattern: /חינוך|לימודים|בית\s*ספר|גן\s*ילדים|חוגים|ספרים|אוניברס|מכללה|פעוטון|קייטנה|תינוק|צעצועים/i,
+    targets: ['ילדים וחינוך', 'חינוך', 'לימודים', 'ילדים'] },
+  // Cash withdrawals  → "כספומט"
   { pattern: /כספומט|משיכת\s*מזומן|atm|מזומן/i,
     targets: ['כספומט'] },
-  // Income (rare in CC files but harmless)  → "הכנסות"
+  // Income  → "הכנסות"
   { pattern: /משכורת|שכר|הכנסה|העברה\s*נכנסת|זיכוי/i,
     targets: ['הכנסות', 'משכורת'] },
+  // Catch-alls landing in "אחר" (the user's bucket for "doesn't fit elsewhere")
+  // Bank labels for clothing, beauty, electronics, office, charity, transfers, "misc"
+  { pattern: /אופנה|ביגוד|בגדים|הנעלה|נעליים|יופי|טיפוח|קוסמטיקה|מספרה|אלקטרוניקה|מוצרי\s*חשמל|ksp|איי-דיגיטל|ציוד|משרד|מוסדות|שונות|העברת\s*כספים|צדקה|תרומה|תרומות|עמותות|חיות\s*מחמד|וטרינר/i,
+    targets: ['אחר', 'ביגוד', 'אופנה', 'טיפוח', 'אלקטרוניקה', 'צדקה', 'חיות מחמד'] },
 ];
 
 /** Try to match a bank's hint string ("מסעדות וקפה") against the household's
@@ -1270,6 +1272,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     ok: false, templateUsed: null, inserted: 0, duplicates: 0, upgradedDuplicates: 0,
     pendingSkipped: 0, forexRows: 0, installmentRows: 0, rowsParsed: 0,
     categorizedRows: 0, bankHintCategorized: 0, merchantKeywordCategorized: 0,
+    taggedExportCategorized: 0, recurringPatternsCreated: 0, transferRows: 0,
     newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
@@ -1341,15 +1344,25 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       parentId: schema.categories.parentId,
     }).from(schema.categories).where(and(
       eq(schema.categories.householdId, ctx.householdId),
-      isNull(schema.categories.parentId),
+      eq(schema.categories.isArchived, false),
     )),
   ]);
 
-  // Top-level categories only — bank hints are coarse and should land on
-  // the parent. The user can split into a sub-category later via the rule
-  // editor.
+  // Two lookup maps:
+  //   • topCategoryByName: parent-level only (used by the bank-hint
+  //     pattern map — coarse hints should land on the parent).
+  //   • subCategoryByName: child categories with their parent id (used by
+  //     tagged-export formats that supply both the parent name and the
+  //     sub-category name as exact strings).
   const topCategoryByName = new Map<string, string>(
-    allCategories.map((c) => [c.nameHe.toLowerCase().trim(), c.id]),
+    allCategories
+      .filter((c) => !c.parentId)
+      .map((c) => [c.nameHe.toLowerCase().trim(), c.id]),
+  );
+  const subCategoryByName = new Map<string, { id: string; parentId: string }>(
+    allCategories
+      .filter((c) => c.parentId)
+      .map((c) => [c.nameHe.toLowerCase().trim(), { id: c.id, parentId: c.parentId! }]),
   );
 
   // Plan fingerprint = (merchantNormalized, paymentAmount-cents, totalPayments,
@@ -1433,10 +1446,19 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
 
   // ── Pass 3: build the final transaction inserts. Apply categorization
   // rules + attach installment_plan_id when applicable. ────────────────────
+  // Precedence (highest first):
+  //   1. User's category rules
+  //   2. Tagged-export EXACT-name match (categoryHint = household category name)
+  //   3. Bank ענף → BANK_HINT_TO_OUR_CATEGORY substring map
+  //   4. Merchant-name keyword scan with the same map
   let categorizedRows = 0;
+  let taggedExportCategorized = 0;
   let bankHintCategorized = 0;
   let merchantKeywordCategorized = 0;
   let rowsLinkedToPlans = 0;
+  // For Pass 4 (after inserts): collect distinct merchants flagged as
+  // recurring and create recurring_pattern rows for them.
+  const recurringByMerchant = new Map<string, { categoryId: string | null; amountSigned: number }>();
   const inserts = rowMetas.map(({ tx, merchantNorm, billingMonth, installment }) => {
     const ruleResult = applyRules(allRules, {
       merchantNormalized: merchantNorm,
@@ -1447,31 +1469,54 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     });
     if (ruleResult) categorizedRows++;
 
-    // Bank-hint fallback: only fires when the user's rules didn't match AND
-    // the parser extracted a categoryHint AND we can map that hint to a
-    // household top-level category. Lower precedence than user rules so the
-    // user can always override via the rule editor.
-    let bankHintCategoryId: string | null = null;
+    // Tagged-export EXACT-name match: the file already carries a category
+    // string that matches one of the household's category names verbatim.
+    // Used by `tagged-export` and any future template that ships ground-truth
+    // data. Higher precedence than the substring map because it's an exact
+    // user-confirmed signal.
+    let taggedCategoryId: string | null = null;
+    let taggedSubCategoryId: string | null = null;
     if (!ruleResult && tx.categoryHint) {
+      const hit = topCategoryByName.get(tx.categoryHint.toLowerCase().trim());
+      if (hit) {
+        taggedCategoryId = hit;
+        taggedExportCategorized++;
+      }
+    }
+    if (taggedCategoryId && tx.subCategoryHint) {
+      const sub = subCategoryByName.get(tx.subCategoryHint.toLowerCase().trim());
+      if (sub && sub.parentId === taggedCategoryId) {
+        taggedSubCategoryId = sub.id;
+      }
+    }
+
+    // Bank-hint fallback: substring map against bank's ענף label.
+    let bankHintCategoryId: string | null = null;
+    if (!ruleResult && !taggedCategoryId && tx.categoryHint) {
       bankHintCategoryId = matchBankHintToCategoryId(tx.categoryHint, topCategoryByName);
       if (bankHintCategoryId) bankHintCategorized++;
     }
 
-    // Merchant-name keyword fallback: when neither the user rules nor the
-    // bank's ענף column gave us a category, try the SAME pattern map
-    // against the raw merchant string. Catches "דלק מנטה קמעונאות דרכים בע\"מ
-    // בית חנן" — the bank's ענף might be empty or generic, but the merchant
-    // name itself contains "דלק" → fuel category. The patterns are designed
-    // for short labels, so they only fire on strong keyword hits and don't
-    // overreach. Lowest-precedence categorizer before AI.
+    // Merchant-name keyword fallback: same map against merchant string.
     let merchantKeywordCategoryId: string | null = null;
-    if (!ruleResult && !bankHintCategoryId) {
+    if (!ruleResult && !taggedCategoryId && !bankHintCategoryId) {
       merchantKeywordCategoryId = matchBankHintToCategoryId(tx.merchantRaw, topCategoryByName);
       if (merchantKeywordCategoryId) merchantKeywordCategorized++;
     }
 
     const planId = installment ? planMap.get(installment.fingerprint) ?? null : null;
     if (planId) rowsLinkedToPlans++;
+
+    // Tagged-export recurring flag: queue for Pass 4. We aggregate by
+    // merchant so multiple recurring rows for the same merchant only
+    // create ONE recurring_pattern (matches the unique-by-merchant index).
+    if (tx.isRecurringHint) {
+      const finalCatId = ruleResult?.categoryId ?? taggedCategoryId ?? bankHintCategoryId ?? merchantKeywordCategoryId ?? null;
+      recurringByMerchant.set(merchantNorm, {
+        categoryId: finalCatId,
+        amountSigned: tx.amountIls,
+      });
+    }
 
     return {
       householdId: ctx.householdId,
@@ -1488,12 +1533,20 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       notes: tx.notes,
       isManual: false,
       isInstallment: !!installment,
+      // Tagged-export transfer flag → set is_transfer for cross-account
+      // hops (no category, no recurring counts; just clean cash flow).
+      ...(tx.isTransferHint ? { isTransfer: true } : {}),
       ...(planId ? { installmentPlanId: planId } : {}),
       ...(ruleResult ? {
         categoryId:    ruleResult.categoryId,
         subCategoryId: ruleResult.subCategoryId,
         appliedRuleId: ruleResult.rule.id,
         categorySource: 'rule' as const,
+      } : taggedCategoryId ? {
+        categoryId:     taggedCategoryId,
+        ...(taggedSubCategoryId ? { subCategoryId: taggedSubCategoryId } : {}),
+        // 'manual' source — the user already tagged this in their file.
+        categorySource: 'manual' as const,
       } : bankHintCategoryId ? {
         categoryId:     bankHintCategoryId,
         // categorySource = 'rule' is reused because the source enum is
@@ -1561,6 +1614,35 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     }
     const duplicates = inserts.length - inserted - upgradedDuplicates;
 
+    // ── Pass 4: materialize recurring patterns from the file's חוזר flag.
+    // Aggregated by merchant in Pass 3, so this is one INSERT per unique
+    // recurring merchant. ON CONFLICT DO NOTHING via the
+    // unique(householdId, merchantNormalized) index — keeps existing
+    // user-edited recurring rows intact on re-import. ─────────────────────
+    let recurringPatternsCreated = 0;
+    if (recurringByMerchant.size > 0) {
+      const month = (() => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      })();
+      for (const [merchant, info] of recurringByMerchant.entries()) {
+        const result = await db.insert(schema.recurringPatterns).values({
+          householdId:        ctx.householdId,
+          merchantNormalized: merchant,
+          ...(info.categoryId ? { categoryId: info.categoryId } : {}),
+          expectedAmountIls:  String(info.amountSigned),
+          medianAmountIls:    String(info.amountSigned),
+          tolerancePct:       10,
+          frequency:          'monthly',
+          occurrenceCount:    0,
+          firstSeenMonth:     month,
+          lastSeenMonth:      month,
+          status:             'active',
+        }).onConflictDoNothing().returning({ id: schema.recurringPatterns.id });
+        if (result.length > 0) recurringPatternsCreated++;
+      }
+    }
+
     await db.insert(schema.auditLog).values({
       householdId: ctx.householdId,
       actorUserId: ctx.userId,
@@ -1577,6 +1659,9 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         categorizedRows,
         bankHintCategorized,
         merchantKeywordCategorized,
+        taggedExportCategorized,
+        recurringPatternsCreated,
+        transferRows: inserts.filter((i) => i.isTransfer === true).length,
         newPlansCreated,
         rowsLinkedToPlans,
         forexRows: parsed.transactions.filter((t) => t.isForex).length,
@@ -1603,6 +1688,9 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       categorizedRows,
       bankHintCategorized,
       merchantKeywordCategorized,
+      taggedExportCategorized,
+      recurringPatternsCreated,
+      transferRows: inserts.filter((i) => i.isTransfer === true).length,
       newPlansCreated,
       rowsLinkedToPlans,
       errors: parsed.errors,

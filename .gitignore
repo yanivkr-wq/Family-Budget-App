@@ -46,3 +46,6 @@ packages/db/drizzle/meta/_journal.tmp.json
 *.dump
 data/postgres/
 infra/secrets/
+
+# Sample bank/CC exports for local analysis — contains real PII, never commit
+samples/

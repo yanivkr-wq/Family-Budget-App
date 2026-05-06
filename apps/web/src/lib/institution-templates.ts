@@ -43,6 +43,20 @@ export interface InstitutionTemplate {
      *  We map these to our household categories in the import action — used
      *  as a fallback when no user rule matches. */
     categoryHint?: number;
+    /** Bank's own sub-category label (only present in tagged-export formats
+     *  like the user's own custom Excel). Mapped via exact-name match
+     *  against the household's sub-categories. */
+    subCategoryHint?: number;
+    /** Truthy column → mark this row's merchant as recurring (creates a
+     *  recurring_pattern row + the קבוע badge fires on /transactions). */
+    recurringFlag?: number;
+    /** Truthy column → mark the transaction as inter-account transfer
+     *  (sets is_transfer = true). */
+    transferFlag?: number;
+    /** Account name baked into a fixed column (some custom exports write
+     *  "חשבון דיסקונט" in every row). When set, used as a hint for
+     *  account routing — but the import action's accountId param wins. */
+    accountNameHint?: number;
   };
   amountConvention: AmountConvention;
   dateFormat: DateFormat;
@@ -75,12 +89,57 @@ export interface InstitutionTemplate {
 }
 
 export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
+  // -------- Personal tagged-export (custom Excel maintained by the user) --------
+  // Detection: this format has TWO very specific column names that don't
+  // appear in any bank's native export — "תת קטגוריה" + "חוזר" +
+  // "העברה בין חשבונות". When all three are present, this is hand-tagged
+  // data, not a raw bank export.
+  // Layout per the user's May-2026 file:
+  //   col 0 = תאריך
+  //   col 1 = חשבון  ← account name baked in (e.g., "חשבון דיסקונט")
+  //   col 2 = ₪ זכות/חובה  ← signed amount
+  //   col 3 = תיאור התנועה
+  //   col 4 = קטגוריה  ← user's own category name (matches household)
+  //   col 5 = תת קטגוריה
+  //   col 6 = חוזר  ← truthy = recurring
+  //   col 7 = העברה בין חשבונות  ← truthy = transfer
+  //   col 8 = הערה
+  // Listed FIRST so its specific keyword score beats bank templates.
+  {
+    id: 'tagged-export',
+    name: 'אקסל מתוייג ידנית (קטגוריה + חוזר + העברה)',
+    type: 'bank',
+    detectionKeywords: [
+      'תת קטגוריה',
+      'העברה בין חשבונות',
+      'חוזר',
+    ],
+    headerRowIndex: 'auto',
+    columns: {
+      transactionDate:  0,
+      accountNameHint:  1,  // baked in per row, used as a sanity-check hint
+      amount:           2,  // signed
+      merchant:         3,  // תיאור התנועה
+      categoryHint:     4,  // exact match against household categories
+      subCategoryHint:  5,  // exact match against household sub-categories
+      recurringFlag:    6,  // truthy → create recurring_pattern
+      transferFlag:     7,  // truthy → set is_transfer
+      notes:            8,
+    },
+    amountConvention: 'signed',
+    dateFormat: 'auto',
+    defaultIsExpense: true,
+  },
+
   // -------- Bank Hapoalim (CSV/Excel export) --------
+  // Detection: REQUIRES the bank's name + a column-name keyword to avoid
+  // greedy matches against generic exports. Pure header keywords like
+  // "תאריך ערך" alone aren't enough — every bank export has them.
   {
     id: 'hapoalim',
     name: 'בנק הפועלים',
     type: 'bank',
-    detectionKeywords: ['בנק הפועלים', 'הפועלים', 'תאריך ערך', 'תאריך פעולה'],
+    detectionKeywords: ['בנק הפועלים', 'הפועלים'],
     headerRowIndex: 'auto',
     columns: {
       transactionDate: 0, // תאריך פעולה
@@ -94,21 +153,31 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     defaultIsExpense: true,
   },
 
-  // -------- Bank Leumi --------
+  // -------- Bank Leumi (current account / עובר ושב) --------
+  // Layout per the May-2026 export:
+  //   col 0 = תאריך
+  //   col 1 = יום ערך
+  //   col 2 = תיאור התנועה
+  //   col 3 = ₪ זכות/חובה  ← single SIGNED amount column (not split)
+  //   col 4 = ₪ יתרה
+  //   col 5 = אסמכתה
+  //   col 6 = עמלה
+  //   col 7 = ערוץ ביצוע
+  // Negative = debit, positive = credit. This replaced the older split-column
+  // export Leumi used to ship.
   {
     id: 'leumi',
     name: 'בנק לאומי',
     type: 'bank',
-    detectionKeywords: ['לאומי', 'תאריך ביצוע', 'תאריך ערך', 'יתרה לאחר'],
+    detectionKeywords: ['לאומי', 'תאריך ביצוע', 'יתרה לאחר', 'יום ערך'],
     headerRowIndex: 'auto',
     columns: {
-      transactionDate: 0, // תאריך ביצוע
-      merchant: 1,         // תיאור פעולה
-      debit: 2,            // חובה
-      credit: 3,           // זכות
-      balance: 5,
+      transactionDate: 0,  // תאריך
+      merchant:        2,  // תיאור התנועה
+      amount:          3,  // ₪ זכות/חובה — signed
+      balance:         4,  // ₪ יתרה
     },
-    amountConvention: 'split_debit_credit',
+    amountConvention: 'signed',
     dateFormat: 'dd/mm/yyyy',
     defaultIsExpense: true,
   },

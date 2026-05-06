@@ -37,6 +37,13 @@ export interface SmartTransaction {
    *  Extracted from the template's `categoryHint` column. Used as a fallback
    *  category signal in the import action when no user rule matches. */
   categoryHint: string | null;
+  /** Bank's own sub-category label (only set by tagged-export formats). */
+  subCategoryHint: string | null;
+  /** Tagged-export hint: this row's merchant should be marked as a
+   *  recurring expense. Triggers recurring_pattern creation in the import. */
+  isRecurringHint: boolean;
+  /** Tagged-export hint: this row is an inter-account transfer. */
+  isTransferHint: boolean;
   /** Source row index for diagnostics */
   sourceRow: number;
 }
@@ -354,6 +361,23 @@ export async function smartImport(
       const categoryHint = cols.categoryHint !== undefined
         ? String(row[cols.categoryHint] ?? '').trim() || null
         : null;
+      const subCategoryHint = cols.subCategoryHint !== undefined
+        ? String(row[cols.subCategoryHint] ?? '').trim() || null
+        : null;
+
+      // Truthy parsing for tagged-export flags. Treat
+      // V/✓/yes/true/1/כן as "true", everything else as false.
+      const truthy = (v: unknown): boolean => {
+        const s = String(v ?? '').trim().toLowerCase();
+        return s === 'v' || s === '✓' || s === 'yes' || s === 'true'
+          || s === '1' || s === 'כן' || s === 'x' || s === 'נכון';
+      };
+      const isRecurringHint = cols.recurringFlag !== undefined
+        ? truthy(row[cols.recurringFlag])
+        : false;
+      const isTransferHint = cols.transferFlag !== undefined
+        ? truthy(row[cols.transferFlag])
+        : false;
 
       transactions.push({
         transactionDate: txnDate,
@@ -370,6 +394,9 @@ export async function smartImport(
         isForex,
         sheetName: sheet.sheetName,
         categoryHint,
+        subCategoryHint,
+        isRecurringHint,
+        isTransferHint,
         sourceRow: i + 1,
       });
     }
