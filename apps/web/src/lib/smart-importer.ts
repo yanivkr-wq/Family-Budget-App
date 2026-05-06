@@ -494,11 +494,28 @@ export async function smartImport(
       break;
     }
     case 'il-cc-issuer-export': {
-      // col [5] = "GooglePay 9648" / "אינטרנט 1939" / "אינטרנט 3767".
-      // The SAME physical card may show MULTIPLE trailing 4-digit
-      // tokens (Google Pay token vs online-purchase token vs physical
-      // card). Pick the DOMINANT (most-rows) identifier — that's what
-      // the user is most likely to recognize as "this card".
+      // Issuer files carry MULTIPLE candidate identifiers — collect them
+      // all so the user can set externalKey to whichever one they
+      // remember:
+      //   • Header row 0 string: "פירוט עסקאות ל<owner> לחשבון <bank>
+      //     <account#> לכרטיס <type> <card-last-4>" — gives us the
+      //     account # + card last-4
+      //   • col [5] tokens: "GooglePay <last-4>" / "אינטרנט <last-4>"
+      //     — these are device-specific tokens (NOT the physical card)
+      // Joined into one space-separated string. The matcher uses
+      // includes() so any single identifier the user sets in
+      // externalKey will match against this combined blob.
+      const candidates = new Set<string>();
+      // Header row 0 of the FIRST sheet usually has the account # and
+      // card last-4 in a single Hebrew sentence. Pull every digit-run.
+      const headerCells = sheets[0]?.rows[0];
+      if (Array.isArray(headerCells)) {
+        const headerText = headerCells.map((c) => String(c ?? '')).join(' ');
+        for (const m of headerText.matchAll(/(\d{4,})/g)) {
+          candidates.add(m[1]!);
+        }
+      }
+      // Plus the dominant token from col [5]
       const counts = new Map<string, number>();
       for (const sheet of sheetsToProcess) {
         for (let i = 0; i < sheet.rows.length; i++) {
@@ -510,12 +527,10 @@ export async function smartImport(
         }
       }
       if (counts.size > 0) {
-        // Sort by count desc → take the leader. Any one of the tokens
-        // can be set as externalKey — the importer's includes() match
-        // means the user only needs to know any one of them.
         const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-        accountKey = sorted[0]![0];
+        candidates.add(sorted[0]![0]);
       }
+      if (candidates.size > 0) accountKey = [...candidates].join(' ');
       break;
     }
     case 'il-cc-bank-export': {
