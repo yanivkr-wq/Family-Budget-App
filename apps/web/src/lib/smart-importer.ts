@@ -227,10 +227,19 @@ export async function smartImport(
   // header rows live. Multi-sheet templates apply the same mapping to all
   // sheets.
   const firstRows = sheets[0]!.rows;
+  // Build the sample text used for template detection.
+  // CRITICAL: collapse ALL whitespace (newlines, tabs, NBSP, multiple
+  // spaces) into single spaces. Bank exports often wrap header labels
+  // mid-cell — e.g., "סכום\nבש\"ח" or "מזהה כרטיס\nבארנק דיגילטי" —
+  // and detection keywords are written as single-line phrases. Without
+  // this normalization the right template silently fails to match and
+  // an unrelated one wins by accidental keyword overlap.
   const sampleText = firstRows
     .slice(0, 30)
     .map((row) => (Array.isArray(row) ? row.map((c) => String(c ?? '')).join(' ') : ''))
-    .join('\n');
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   const template = detectInstitution(sampleText);
   if (!template) {
