@@ -3,7 +3,10 @@ import { redirect } from 'next/navigation';
 import { RULES_CATALOG, RULE_CATEGORIES, type RuleCategory } from '@/lib/rules-catalog';
 import { BookOpen } from 'lucide-react';
 
-export const dynamic = 'force-static'; // pure content — no DB hit needed
+// auth() needs cookies on every request → can't statically pre-render.
+// The catalog data itself is static (compiled into the bundle), so the
+// runtime work here is tiny — just an auth check + a render.
+export const dynamic = 'force-dynamic';
 
 /**
  * Story-mode catalog of all the business logic baked into the app.
