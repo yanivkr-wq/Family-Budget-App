@@ -122,6 +122,14 @@ export default async function TransactionsPage(props: {
       // and contributes to the cycle-header recurring subtotal.
       recurringPatternId:        schema.recurringPatterns.id,
       recurringPatternFrequency: schema.recurringPatterns.frequency,
+      // Forex: when the original purchase was in a non-NIS currency, we
+      // keep the original amount + currency code so the row can show a
+      // small "$ 20.00" badge alongside the NIS amount.
+      originalAmount:   schema.transactions.originalAmount,
+      originalCurrency: schema.transactions.originalCurrency,
+      // Transfer-pair link — when set, this row pairs with another in a
+      // different account (cross-account transfer; cancels out in cash flow).
+      transferPairId: schema.transactions.transferPairId,
     })
     .from(schema.transactions)
     .leftJoin(
@@ -377,6 +385,9 @@ export default async function TransactionsPage(props: {
           installmentEndMonth:         t.installmentEndMonth,
           recurringPatternId:        t.recurringPatternId,
           recurringPatternFrequency: t.recurringPatternFrequency,
+          originalAmount:   t.originalAmount !== null ? Number(t.originalAmount) : null,
+          originalCurrency: t.originalCurrency,
+          transferPairId:   t.transferPairId,
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}

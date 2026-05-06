@@ -14,7 +14,7 @@
  */
 
 import { useState, useTransition } from 'react';
-import { Loader2, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, CreditCard, Globe2, Repeat, Sparkles, Tag, Landmark, Search, UserCheck, ArrowLeftRight } from 'lucide-react';
+import { Loader2, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, CreditCard, Globe2, Repeat, Sparkles, Tag, Landmark, Search, UserCheck, ArrowLeftRight, Plus, Link2 } from 'lucide-react';
 import { importBankExport, type BankExportImportResult } from './actions';
 
 interface AccountOption {
@@ -181,8 +181,17 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
           {result.recurringPatternsCreated > 0 && (
             <Stat icon={<Repeat className="size-3.5 text-primary" />} label="הוצאות קבועות נוצרו" value={result.recurringPatternsCreated} />
           )}
+          {result.matchedExistingRecurring > 0 && (
+            <Stat icon={<Repeat className="size-3.5 text-success" />} label="התאימו לקבועות קיימות" value={result.matchedExistingRecurring} />
+          )}
+          {result.categoriesCreated > 0 && (
+            <Stat icon={<Plus className="size-3.5 text-success" />} label="קטגוריות נוצרו" value={result.categoriesCreated} />
+          )}
           {result.transferRows > 0 && (
             <Stat icon={<ArrowLeftRight className="size-3.5 text-accent" />} label="העברות בין חשבונות" value={result.transferRows} />
+          )}
+          {result.transferPairsLinked > 0 && (
+            <Stat icon={<Link2 className="size-3.5 text-success" />} label="זוגות העברה זוּוגו" value={result.transferPairsLinked} />
           )}
           {result.newPlansCreated > 0 && (
             <Stat icon={<CreditCard className="size-3.5 text-accent" />} label="תוכניות תשלומים נוצרו" value={result.newPlansCreated} />

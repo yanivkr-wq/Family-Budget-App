@@ -343,19 +343,28 @@ export async function smartImport(
         }
       }
 
-      // isForex: anything non-ILS, OR the whole sheet is the forex sheet.
-      const isForex = sheetIsForex || (originalCurrency !== null && originalCurrency !== 'ILS');
+      // isForex: STRICT — only when the original transaction was actually
+      // in a non-NIS currency. Discount Key's "עסקאות חו"ל ומט"ח" sheet
+      // also includes foreign-MERCHANT rows that the bank already
+      // converted to NIS at the source (e.g., Netflix Amsterdam billed in
+      // ₪). Those aren't forex from the user's wallet perspective — they
+      // paid NIS — so we don't flag them.
+      const isForex = (originalCurrency !== null && originalCurrency !== 'ILS');
+      // sheetIsForex still drives chargeDate=immediate below, but doesn't
+      // set the forex flag on its own.
+      void sheetIsForex; // (consumed in chargeDate calc below)
 
       // chargeDate resolution priority:
       //   1. Per-row column (Format B)
-      //   2. Forex → equals transactionDate (immediate charge — user requested)
+      //   2. Forex OR foreign-merchant sheet → equals transactionDate
+      //      (Israeli CCs charge these immediately, not on the next cycle)
       //   3. Global header date (Format A)
       //   4. null (calculated later from billing-cycle logic)
       let chargeDate: string | null = null;
       if (cols.chargeDate !== undefined) {
         chargeDate = parseDateForTemplate(row[cols.chargeDate], template.dateFormat);
       }
-      if (!chargeDate && isForex) chargeDate = txnDate;
+      if (!chargeDate && (isForex || sheetIsForex)) chargeDate = txnDate;
       if (!chargeDate && globalChargeDate) chargeDate = globalChargeDate;
 
       const categoryHint = cols.categoryHint !== undefined

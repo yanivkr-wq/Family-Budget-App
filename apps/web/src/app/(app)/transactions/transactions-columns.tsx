@@ -37,7 +37,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock } from 'lucide-react';
+import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock, Globe2, ArrowLeftRight } from 'lucide-react';
 import { formatIls, formatDateHe } from '@fba/shared';
 import { cn } from '@/lib/utils';
 
@@ -76,6 +76,14 @@ export interface CellContext {
     installmentEndMonth?: string | null;
     recurringPatternId?: string | null;
     recurringPatternFrequency?: string | null;
+    /** Original amount in non-NIS currency (null = NIS purchase). */
+    originalAmount?: number | null;
+    /** ISO currency code of the original amount (USD, EUR, GBP...). */
+    originalCurrency?: string | null;
+    /** When set, this transaction is the matched half of a cross-account
+     *  transfer pair. Renders a small "↔" badge so the user knows the row
+     *  cancels with another in the dataset. */
+    transferPairId?: string | null;
   };
   cat: Cat | null;
   subCat: Cat | null;
@@ -131,9 +139,38 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
-    // Pure merchant text now — installment / recurring pills moved to the
-    // dedicated "תג" column so the merchant column stays clean and skim-able.
-    renderCell: ({ t }) => <>{t.merchant}</>,
+    // Merchant text + small inline badges for cross-cutting concerns:
+    //   • forex (original currency + amount)
+    //   • cross-account transfer (paired with another row)
+    // Both render as compact pills so they don't disrupt skim-ability.
+    renderCell: ({ t }) => {
+      const isForex = !!t.originalCurrency && t.originalCurrency !== 'ILS';
+      const isTransfer = !!t.transferPairId;
+      if (!isForex && !isTransfer) return <>{t.merchant}</>;
+      return (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>{t.merchant}</span>
+          {isForex && (
+            <span
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+              title={`עסקה בחו"ל — מקור: ${t.originalAmount?.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${t.originalCurrency}, חיוב מיידי`}
+            >
+              <Globe2 className="size-2.5 shrink-0" />
+              {t.originalCurrency} {t.originalAmount?.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+            </span>
+          )}
+          {isTransfer && (
+            <span
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+              title="העברה בין חשבונות — שורה זו זוּוגה לחיוב נגדי בחשבון אחר"
+            >
+              <ArrowLeftRight className="size-2.5 shrink-0" />
+              העברה
+            </span>
+          )}
+        </div>
+      );
+    },
   },
 
   flag: {

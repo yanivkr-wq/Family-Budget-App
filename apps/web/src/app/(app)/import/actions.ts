@@ -1118,6 +1118,16 @@ export interface BankExportImportResult {
   /** Transactions flagged as inter-account transfers via the file's
    *  "העברה בין חשבונות" column. */
   transferRows: number;
+  /** Pairs of cross-account transfers that got linked together via
+   *  transfer_pair_id (1 pair = 2 rows). Includes pairs where one side
+   *  was already in the DB from a previous import. */
+  transferPairsLinked: number;
+  /** Categories (parent or sub) auto-created from tagged-export hints. */
+  categoriesCreated: number;
+  /** Imported transactions whose merchant matched an existing recurring
+   *  pattern (so they'll show the קבוע badge). Lets the user see at-a-
+   *  glance how much of the new import is recurring vs one-offs. */
+  matchedExistingRecurring: number;
   /** Installment plans auto-created during this import (didn't exist before). */
   newPlansCreated:   number;
   /** Rows linked to an installment plan (newly created OR pre-existing). */
@@ -1273,6 +1283,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     pendingSkipped: 0, forexRows: 0, installmentRows: 0, rowsParsed: 0,
     categorizedRows: 0, bankHintCategorized: 0, merchantKeywordCategorized: 0,
     taggedExportCategorized: 0, recurringPatternsCreated: 0, transferRows: 0,
+    transferPairsLinked: 0, categoriesCreated: 0, matchedExistingRecurring: 0,
     newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
@@ -1364,6 +1375,56 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       .filter((c) => c.parentId)
       .map((c) => [c.nameHe.toLowerCase().trim(), { id: c.id, parentId: c.parentId! }]),
   );
+
+  // ── Pass 0: auto-create categories from tagged-export hints. Only kicks
+  // in for the `tagged-export` template — other formats use the substring
+  // hint map, where unmatched hints just fall through to the next pass. ──
+  let categoriesCreated = 0;
+  if (parsed.templateUsed?.id === 'tagged-export') {
+    // Distinct (parent, sub) pairs from the parsed rows
+    const pairs = new Map<string, { parent: string; sub: string | null }>();
+    for (const t of parsed.transactions) {
+      if (!t.categoryHint) continue;
+      const key = `${t.categoryHint}|${t.subCategoryHint ?? ''}`;
+      if (pairs.has(key)) continue;
+      pairs.set(key, { parent: t.categoryHint, sub: t.subCategoryHint ?? null });
+    }
+
+    let nextSortOrder = allCategories.length;
+    for (const { parent, sub } of pairs.values()) {
+      const parentKey = parent.toLowerCase().trim();
+      let parentId = topCategoryByName.get(parentKey) ?? null;
+      // Create parent if missing
+      if (!parentId) {
+        const [created] = await db.insert(schema.categories).values({
+          householdId: ctx.householdId,
+          nameHe:      parent,
+          sortOrder:   nextSortOrder++,
+        }).returning({ id: schema.categories.id });
+        if (created) {
+          parentId = created.id;
+          topCategoryByName.set(parentKey, parentId);
+          categoriesCreated++;
+        }
+      }
+      // Create sub-category if missing AND we have a parent
+      if (sub && parentId) {
+        const subKey = sub.toLowerCase().trim();
+        if (!subCategoryByName.has(subKey)) {
+          const [created] = await db.insert(schema.categories).values({
+            householdId: ctx.householdId,
+            nameHe:      sub,
+            parentId,
+            sortOrder:   0,
+          }).returning({ id: schema.categories.id });
+          if (created) {
+            subCategoryByName.set(subKey, { id: created.id, parentId });
+            categoriesCreated++;
+          }
+        }
+      }
+    }
+  }
 
   // Plan fingerprint = (merchantNormalized, paymentAmount-cents, totalPayments,
   // accountId). Cents-precision avoids float comparison issues. accountId is
@@ -1643,6 +1704,88 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       }
     }
 
+    // ── Pass 5: cross-account transfer pairing.
+    // When a transfer happens between two of the user's accounts (e.g.,
+    // Leumi → Discount), each side appears in its own bank file. We've
+    // already flagged each side as is_transfer = true via the tagged-export
+    // העברה column. Now we need to find pairs and link them via
+    // transfer_pair_id so they cancel out in cash-flow widgets.
+    //
+    // Pairing rules:
+    //   • both must be in the same household
+    //   • is_transfer = true on both
+    //   • both have transfer_pair_id IS NULL (don't double-pair)
+    //   • account_id MUST differ (same-account transfers don't make sense)
+    //   • amounts sum to ~0 (one positive, one negative, equal magnitude)
+    //   • dates within ±2 days (settlement delay)
+    //
+    // We query all unpaired transfers for the household — not just this
+    // import — so a Leumi side imported today can pair with a Discount
+    // side imported yesterday. ────────────────────────────────────────────
+    const unpaired = await db
+      .select({
+        id:              schema.transactions.id,
+        accountId:       schema.transactions.accountId,
+        transactionDate: schema.transactions.transactionDate,
+        amountIls:       schema.transactions.amountIls,
+      })
+      .from(schema.transactions)
+      .where(and(
+        eq(schema.transactions.householdId, ctx.householdId),
+        eq(schema.transactions.isTransfer, true),
+        isNull(schema.transactions.transferPairId),
+        isNull(schema.transactions.deletedAt),
+      ));
+
+    // Pair greedily: smallest date-difference first wins.
+    let transferPairsLinked = 0;
+    const used = new Set<string>();
+    for (let i = 0; i < unpaired.length; i++) {
+      const a = unpaired[i]!;
+      if (used.has(a.id)) continue;
+      const aAmt = Number(a.amountIls);
+      let best: { id: string; daysDiff: number } | null = null;
+      for (let j = i + 1; j < unpaired.length; j++) {
+        const b = unpaired[j]!;
+        if (used.has(b.id)) continue;
+        if (b.accountId === a.accountId) continue; // must be different accounts
+        const bAmt = Number(b.amountIls);
+        // Opposite sign + equal magnitude (within 1 agora to absorb rounding)
+        if (Math.abs(aAmt + bAmt) > 0.01) continue;
+        if (Math.sign(aAmt) === Math.sign(bAmt)) continue;
+        const daysDiff = Math.abs(
+          (new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()) / 86400000,
+        );
+        if (daysDiff > 2) continue;
+        if (!best || daysDiff < best.daysDiff) best = { id: b.id, daysDiff };
+      }
+      if (best) {
+        await db.update(schema.transactions)
+          .set({ transferPairId: best.id })
+          .where(eq(schema.transactions.id, a.id));
+        await db.update(schema.transactions)
+          .set({ transferPairId: a.id })
+          .where(eq(schema.transactions.id, best.id));
+        used.add(a.id);
+        used.add(best.id);
+        transferPairsLinked++;
+      }
+    }
+
+    // ── Pass 6: count this import's matched-recurring transactions for the
+    // user-facing summary ("X out of your N new transactions are recurring").
+    const recurringMerchants = await db
+      .select({ m: schema.recurringPatterns.merchantNormalized })
+      .from(schema.recurringPatterns)
+      .where(and(
+        eq(schema.recurringPatterns.householdId, ctx.householdId),
+        eq(schema.recurringPatterns.status, 'active'),
+      ));
+    const recurringSet = new Set(recurringMerchants.map((r) => r.m));
+    const matchedExistingRecurring = inserts.filter((i) =>
+      recurringSet.has(i.merchantNormalized as string),
+    ).length;
+
     await db.insert(schema.auditLog).values({
       householdId: ctx.householdId,
       actorUserId: ctx.userId,
@@ -1662,6 +1805,9 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         taggedExportCategorized,
         recurringPatternsCreated,
         transferRows: inserts.filter((i) => i.isTransfer === true).length,
+        transferPairsLinked,
+        categoriesCreated,
+        matchedExistingRecurring,
         newPlansCreated,
         rowsLinkedToPlans,
         forexRows: parsed.transactions.filter((t) => t.isForex).length,
@@ -1691,6 +1837,9 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       taggedExportCategorized,
       recurringPatternsCreated,
       transferRows: inserts.filter((i) => i.isTransfer === true).length,
+      transferPairsLinked,
+      categoriesCreated,
+      matchedExistingRecurring,
       newPlansCreated,
       rowsLinkedToPlans,
       errors: parsed.errors,
