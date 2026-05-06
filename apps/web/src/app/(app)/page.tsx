@@ -17,6 +17,7 @@ import { DashboardChatHint } from './dashboard-chat-hint';
 import { GoalIcon } from '@/components/ui/goal-icon';
 import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
 import { readActiveView } from '@/components/view-tabs-server';
+import { MonthSwitcher } from './transactions/month-switcher';
 import { INSIGHT_ICONS, type InsightIconName } from './dashboard-insight-icons';
 import {
   Wallet,
@@ -478,7 +479,18 @@ export default async function DashboardPage(props: {
               business: `/?view=business&month=${month}`,
             }}
           />
-          <form action="/" method="get">
+          <MonthSwitcher
+            month={month}
+            view={view}
+            prev={prevMonth}
+            next={addMonths(month, 1)}
+            label={month === activeBillingMonth(10) ? 'חודש נוכחי' : month > activeBillingMonth(10) ? 'חודש הבא' : 'חודש קודם'}
+            activeMonth={activeBillingMonth(10)}
+            basePath="/"
+          />
+          {/* Hidden no-JS fallback — kept so users without JS can still
+              switch months via the form-submit path. */}
+          <form action="/" method="get" className="hidden">
             <input type="hidden" name="view" value={view} />
             <select
               name="month"

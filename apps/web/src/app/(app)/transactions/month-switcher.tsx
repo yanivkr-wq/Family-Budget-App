@@ -38,6 +38,7 @@ export function MonthSwitcher({
   next,
   label,
   activeMonth,
+  basePath = '/transactions',
 }: {
   month: string;
   view: string;
@@ -48,9 +49,12 @@ export function MonthSwitcher({
    *  shown in the dropdown so it doesn't drift if the user is browsing far
    *  in the past. */
   activeMonth: string;
+  /** URL path to navigate to (default: /transactions). Pass '/' for the
+   *  dashboard so the same component works on both pages. */
+  basePath?: string;
 }) {
   const router = useRouter();
-  const buildHref = (m: string) => `/transactions?month=${m}&view=${view}`;
+  const buildHref = (m: string) => `${basePath}?month=${m}&view=${view}`;
   const options = buildOptions(activeMonth);
 
   return (

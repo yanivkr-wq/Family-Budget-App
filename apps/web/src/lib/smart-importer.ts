@@ -146,7 +146,16 @@ function applyAmountConvention(
       if (cols.amount === undefined) return null;
       const a = parseAmount(row[cols.amount]);
       if (!Number.isFinite(a) || a === 0) return null;
-      return { amount: Math.abs(a), isExpense: a < 0 || template.defaultIsExpense };
+      // Sign interpretation depends on the account type the file is for:
+      //   • bank statement: file's sign IS truth — debit (-) is an
+      //     expense, credit (+) is income. A salary row with +18,225
+      //     should land as income, not get flipped to expense by
+      //     defaultIsExpense.
+      //   • credit card: positive amounts are CHARGES (expenses),
+      //     negative amounts are REFUNDS (income / "זיכוי"). Sign is
+      //     OPPOSITE of what we want.
+      const isExpense = template.type === 'bank' ? a < 0 : a > 0;
+      return { amount: Math.abs(a), isExpense };
     }
     case 'split_debit_credit': {
       const debit = cols.debit !== undefined ? parseAmount(row[cols.debit]) : NaN;
