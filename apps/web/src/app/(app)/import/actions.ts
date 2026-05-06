@@ -1698,6 +1698,31 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     };
   });
 
+  // ── Disambiguate intra-batch duplicate externalIds.
+  // When the source file has TRUE duplicate rows (e.g., the user bought
+  // coffee twice in one day at the same place for the same amount, or two
+  // identical parking charges), they hash to the same externalId. Postgres
+  // refuses ON CONFLICT DO UPDATE to touch the same row twice in one
+  // statement → "command cannot affect row a second time".
+  //
+  // Fix: walk the rows once, count each externalId, and append a "#N"
+  // suffix to the 2nd / 3rd / ... occurrence. Idempotent across re-imports
+  // because the source order is stable AND we only suffix WITHIN the
+  // duplicate group, leaving the first occurrence untouched.
+  // ───────────────────────────────────────────────────────────────────────
+  const seenSeq = new Map<string, number>();
+  for (const row of inserts) {
+    const base = row.externalId as string;
+    const n = (seenSeq.get(base) ?? 0) + 1;
+    seenSeq.set(base, n);
+    if (n > 1) {
+      // Suffix into the same 24-char fingerprint slot so the unique index
+      // still holds. We hash the (base, n) pair so the result stays a
+      // 24-char hex string and doesn't widen the column.
+      row.externalId = createHash('sha1').update(`${base}#${n}`).digest('hex').slice(0, 24);
+    }
+  }
+
   // ── Insert with ON CONFLICT DO UPDATE. Only fills NULL fields (via
   // COALESCE) so re-importing the same file UPGRADES previously-imported
   // rows that lacked categorization or plan-linking, without overwriting
