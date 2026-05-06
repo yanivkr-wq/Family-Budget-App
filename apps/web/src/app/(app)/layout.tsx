@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { ChatDrawer } from '@/components/chat-drawer';
 import { MobileBottomNav, SidebarNav } from '@/components/nav';
 import { GlobalHeader } from '@/components/global-header';
+import { FeedbackWidget } from '@/components/feedback-widget';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
@@ -57,6 +58,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         householdId={session.user.householdId}
         userDisplayName={session.user.name ?? null}
       />
+
+      {/* Floating "leave feedback" button — visible on every (app) page.
+          Sits opposite the chat-drawer launcher to avoid corner collision. */}
+      <FeedbackWidget />
     </div>
   );
 }

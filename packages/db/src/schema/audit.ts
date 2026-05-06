@@ -25,6 +25,42 @@ export const auditLog = pgTable(
   }),
 );
 
+/**
+ * In-app feedback the admin captures while using the app — bugs, UX
+ * complaints, feature ideas, anything they want to remember to fix
+ * later. Exported as Markdown from /admin/feedback so the next dev
+ * session (e.g., handed to Claude Code) can act on the list.
+ */
+export const feedback = pgTable(
+  'feedback',
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    householdId: uuid()
+      .notNull()
+      .references(() => households.id, { onDelete: 'cascade' }),
+    actorUserId: uuid().references(() => users.id, { onDelete: 'set null' }),
+    /** Free taxonomy — drives the badge color in the list. */
+    category: text({ enum: ['bug', 'ux', 'feature', 'other'] })
+      .notNull()
+      .default('other'),
+    message: text().notNull(),
+    /** URL pathname when the feedback was submitted (best-effort context
+     *  for "this page is confusing" type notes). */
+    pagePath: text(),
+    /** Browser UA — useful for "this only happens on mobile" repros. */
+    userAgent: text(),
+    status: text({ enum: ['open', 'in_progress', 'resolved', 'dismissed'] })
+      .notNull()
+      .default('open'),
+    resolvedAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    householdIdx: index().on(t.householdId, t.createdAt),
+    statusIdx:    index().on(t.householdId, t.status),
+  }),
+);
+
 export const undoStack = pgTable(
   'undo_stack',
   {

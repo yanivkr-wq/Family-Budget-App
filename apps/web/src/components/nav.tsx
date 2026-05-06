@@ -19,6 +19,7 @@ import {
   Shield,
   History,
   PiggyBank,
+  MessageSquare,
   type LucideIcon,
 } from 'lucide-react';
 import { he } from '@fba/shared';
@@ -47,6 +48,7 @@ const LINKS: NavLink[] = [
   { href: '/admin/accounts', label: he.nav.accounts, icon: CreditCard, group: 'admin' },
   { href: '/admin/rules', label: he.nav.rules, icon: SettingsIcon, group: 'admin' },
   { href: '/admin/imports', label: 'היסטוריית ייבוא', icon: History, group: 'admin' },
+  { href: '/admin/feedback', label: 'פידבק', icon: MessageSquare, group: 'admin' },
   { href: '/admin/audit', label: he.nav.audit, icon: ScrollText, group: 'admin' },
   { href: '/admin/privacy', label: 'יומן פרטיות', icon: Shield, group: 'admin' },
   { href: '/settings/password', label: 'סיסמה', icon: KeyRound, group: 'admin' },
