@@ -396,6 +396,22 @@ export const RULES_CATALOG: RuleEntry[] = [
     code: ['apps/web/src/app/(app)/admin/rules/actions.ts'],
   },
 
+  // ── CHAT ───────────────────────────────────────────────────────────
+  {
+    id: 'chat-history-block-splitting',
+    title: 'פיצול בלוקים בהיסטוריית הצ\'אט (assistant ↔ user)',
+    category: 'transactions',
+    story:
+      'כששיחה עם ה-AI כוללת קריאות לכלי (tool_use → tool_result), שמירת ' +
+      'ההיסטוריה בקובץ אחד מסכמת את כל הבלוקים יחד. אבל ה-API של Anthropic ' +
+      'דורש ש-tool_result יושב תמיד בהודעת USER, לא assistant. בטעינה מחדש ' +
+      'מ-DB אני מפצל את הבלוקים השמורים: text + tool_use → assistant, ' +
+      'tool_result → user. שומר על המבנה של API גם בשיחות ארוכות עם כלים.',
+    why: 'בלי פיצול, קריאת ה-API השנייה בכל שיחה נכשלה עם 400 ' +
+         '"tool_result blocks can only be in user messages".',
+    code: ['apps/worker/src/routes/chat.ts'],
+  },
+
   // ── DASHBOARD ──────────────────────────────────────────────────────
   {
     id: 'dashboard-view-scoping',

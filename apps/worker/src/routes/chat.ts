@@ -60,12 +60,57 @@ export async function registerChatRoutes(
       .orderBy(asc(schema.chatMessages.createdAt))
       .limit(40);
 
-    const history: ConversationMessage[] = historyRows
-      .filter((r) => r.role !== 'tool') // tool blocks live inside assistant content
-      .map((r) => ({
-        role: r.role as 'user' | 'assistant',
-        content: JSON.parse(decryptString(r.contentEncrypted)),
-      }));
+    // Each chat_message row is a single saved row, but a saved
+    // "assistant" row can actually contain MULTIPLE Anthropic-API turns
+    // (assistant text + tool_use, then tool_result blocks, then more
+    // assistant text, etc.) — they were appended to a single
+    // finalContent array and saved as one row for storage simplicity.
+    //
+    // The Anthropic API requires that tool_result blocks live in user
+    // messages, never assistant messages. So when we replay history, we
+    // walk each saved row's blocks and split them: assistant blocks
+    // (text + tool_use) go into an assistant message, tool_result
+    // blocks go into a user message. This restores the alternating
+    // shape the API requires.
+    type Block = { type: string; [k: string]: unknown };
+    const history: ConversationMessage[] = [];
+    for (const row of historyRows) {
+      if (row.role === 'tool') continue; // legacy
+      const blocks = JSON.parse(decryptString(row.contentEncrypted)) as Block[];
+      if (row.role === 'user') {
+        // User rows are simple — just push as-is.
+        history.push({ role: 'user', content: blocks as unknown as ConversationMessage['content'] });
+        continue;
+      }
+      // Assistant row: split into alternating assistant / user pairs by
+      // block type. Each tool_result block flushes pending assistant
+      // blocks into an assistant message, then opens a user message for
+      // the tool_result. Subsequent text/tool_use re-opens an assistant
+      // message.
+      let asstBuf: Block[] = [];
+      let userBuf: Block[] = [];
+      const flushAsst = () => {
+        if (asstBuf.length === 0) return;
+        history.push({ role: 'assistant', content: asstBuf as unknown as ConversationMessage['content'] });
+        asstBuf = [];
+      };
+      const flushUser = () => {
+        if (userBuf.length === 0) return;
+        history.push({ role: 'user', content: userBuf as unknown as ConversationMessage['content'] });
+        userBuf = [];
+      };
+      for (const b of blocks) {
+        if (b.type === 'tool_result') {
+          flushAsst();
+          userBuf.push(b);
+        } else {
+          flushUser();
+          asstBuf.push(b);
+        }
+      }
+      flushUser();
+      flushAsst();
+    }
 
     // Persist the new user message before calling the model.
     const [userMsg] = await db
