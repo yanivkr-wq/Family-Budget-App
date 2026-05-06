@@ -602,24 +602,36 @@ export async function smartImport(
       if (m) accountKey = m[1]!.replace(/[\s-]/g, '');
       break;
     }
-    case 'leumi': {
-      // Israeli current-account exports (Leumi + Discount) put the
+    case 'leumi':
+    case 'leumi-business-html':
+    case 'discount':
+    case 'hapoalim':
+    case 'mizrahi': {
+      // Israeli current-account exports (Leumi + Discount + Hapoalim +
+      // Mizrahi + the HTML-as-.xls Leumi business format) all put the
       // account number in a header row above the data, like:
       //   "חשבון: 0103054393"
+      //   "מס' חשבון : 669-47034/08"
       //   "חשבון: 669-4703428"
-      // Sweep the first 10 rows for any 7+ digit run (account numbers
-      // are 7-12 digits). Collect ALL candidates so the user can set
-      // externalKey to the format their portal uses.
+      // Sweep the first 10 rows for any digit run with optional
+      // separators (dashes / slashes / spaces). Collect ALL candidates
+      // — both the original and a stripped version — so the user can
+      // set externalKey to whichever format their portal uses.
       const candidates = new Set<string>();
       for (const sheet of sheets) {
         for (let i = 0; i < Math.min(10, sheet.rows.length); i++) {
           const r = sheet.rows[i];
           if (!Array.isArray(r)) continue;
           const text = r.map((c) => String(c ?? '')).join(' ');
-          for (const m of text.matchAll(/(\d[\d\-]{6,})/g)) {
-            // Strip dashes for one variant + keep original for another
-            candidates.add(m[1]!);
-            candidates.add(m[1]!.replace(/[\-\s]/g, ''));
+          // Pattern: 7+ digits possibly with internal -/spaces.
+          // (also captures runs split by /, like "669-47034/08")
+          for (const m of text.matchAll(/(\d[\d\-/\s]{5,}\d)/g)) {
+            const raw = m[1]!.trim();
+            const stripped = raw.replace(/[\-\s\/]/g, '');
+            if (stripped.length >= 6) {
+              candidates.add(raw);
+              candidates.add(stripped);
+            }
           }
         }
       }

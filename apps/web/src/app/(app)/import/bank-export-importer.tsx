@@ -234,6 +234,9 @@ function BatchRow({ entry, index }: { entry: BatchEntry; index: number }) {
         {!r?.ok && r?.message && (
           <span className="ms-auto text-xs text-destructive">{r.message}</span>
         )}
+        {!r && entry.error && (
+          <span className="ms-auto text-xs text-destructive">{entry.error}</span>
+        )}
       </button>
       {expanded && r && (
         <div className="border-t bg-card/50 p-3">

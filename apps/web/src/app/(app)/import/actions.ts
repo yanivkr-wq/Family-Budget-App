@@ -1355,16 +1355,27 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   let accountId = userPickedAccountId;
   let autoRouted = false;
   if (!accountId && parsedEarly.accountKey) {
-    // Find the household account whose externalKey matches the file's
-    // identifier (case + whitespace insensitive). Use a substring check
-    // so "9648" matches an account configured with "GooglePay 9648" or
-    // similar formatting variants.
+    // Find the household account whose externalKey appears in the file's
+    // identifier blob (matcher uses substring both ways for flexibility
+    // — minor formatting variations should still pair).
+    //
+    // CRITICAL: filter accounts by TYPE matching the template's type.
+    // CC files (il-cc-issuer-export, il-cc-bank-export, discount-key)
+    // can only route to credit_card accounts; bank files (leumi,
+    // leumi-business-html, etc.) can only route to bank accounts. Without
+    // this, a Diners file's blob ("3427 4703428 7631" — card last-4 +
+    // parent bank account # + Google Pay token) would match BOTH the
+    // Diners CC account (externalKey 3427) AND the Leumi business
+    // account (externalKey 47034 ⊂ 4703428) → "2 accounts" error.
+    const wantsAccountType: 'bank' | 'credit_card' | null =
+      parsedEarly.templateUsed?.type ?? null;
     const norm = (s: string | null | undefined) =>
-      String(s ?? '').toLowerCase().replace(/[\s\-]/g, '');
+      String(s ?? '').toLowerCase().replace(/[\s\-/]/g, '');
     const fileKey = norm(parsedEarly.accountKey);
     const candidates = await db
       .select({
         id: schema.accounts.id,
+        type: schema.accounts.type,
         externalKey: schema.accounts.externalKey,
       })
       .from(schema.accounts)
@@ -1373,6 +1384,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         eq(schema.accounts.isActive, true),
       ));
     const hits = candidates.filter((a) => {
+      if (wantsAccountType && a.type !== wantsAccountType) return false;
       const acctKey = norm(a.externalKey);
       if (!acctKey) return false;
       return acctKey === fileKey || acctKey.includes(fileKey) || fileKey.includes(acctKey);
