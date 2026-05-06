@@ -19,6 +19,7 @@ export default async function AccountsAdminPage() {
       purpose: schema.accounts.purpose,
       institution: schema.accounts.institution,
       accountNumberMasked: schema.accounts.accountNumberMasked,
+      externalKey: schema.accounts.externalKey,
       paymentSchedule: schema.accounts.paymentSchedule,
       cutoffDay: schema.accounts.cutoffDay,
       chargeDay: schema.accounts.chargeDay,

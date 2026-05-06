@@ -37,7 +37,8 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
     const data = new FormData(form);
     const file = data.get('file');
     if (!(file instanceof File) || file.size === 0) return;
-    if (!accountId) return;
+    // accountId is OPTIONAL — empty means "auto-detect via externalKey".
+    // If detection fails server-side, the result card surfaces an error.
     setFilename(file.name);
     setResult(null);
     startTransition(async () => {
@@ -59,19 +60,24 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
   return (
     <div className="space-y-4">
       <form onSubmit={onSubmit} className="space-y-3" dir="rtl">
-        {/* Account selector — required so we know which account this file belongs to */}
+        {/* Account selector — OPTIONAL.
+            When left as "auto-detect", the importer matches the file's
+            embedded identifier (CC last-4, bank account number, sheet
+            name) against `account.externalKey` and routes automatically.
+            Configure the externalKey once per account in /admin/accounts
+            and you'll never have to pick from this dropdown again. */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-muted-foreground">
-            חשבון יעד <span className="text-destructive">*</span>
+            חשבון יעד
           </label>
           <select
             name="accountId"
             value={accountId}
             onChange={(e) => setAccountId(e.target.value)}
-            required
             disabled={isPending}
             className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
+            <option value="">— זיהוי אוטומטי לפי הקובץ —</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} · {a.type === 'credit_card' ? 'אשראי' : 'בנק'} · {a.purpose === 'business' ? 'עסקי' : a.purpose === 'shared' ? 'משותף' : 'אישי'}
@@ -79,7 +85,9 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
             ))}
           </select>
           <p className="text-[11px] text-muted-foreground">
-            כל השורות בקובץ ייכנסו לחשבון הזה. אם הקובץ מכיל מספר כרטיסים, נחזיר אזהרה לאחר הניתוח.
+            השאר ב-&quot;זיהוי אוטומטי&quot; — אם הוגדר &quot;מזהה חיצוני&quot; באחד החשבונות
+            ב-<a className="underline" href="/admin/accounts">חשבונות</a>, נחבר אותו אוטומטית.
+            אחרת בחר חשבון מפורש.
           </p>
         </div>
 
@@ -95,7 +103,7 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
               className="block w-full text-sm file:me-3 file:rounded-md file:border-0 file:bg-primary-soft file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary file:transition-colors hover:file:bg-primary-soft/70"
             />
           </label>
-          <button type="submit" disabled={isPending || !accountId} className="btn-primary">
+          <button type="submit" disabled={isPending} className="btn-primary">
             {isPending ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
             {isPending ? 'מייבא…' : 'ייבא'}
           </button>
@@ -145,6 +153,15 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             תבנית: {result.templateUsed?.name ?? '—'}
+            {result.destinationAccountName && (
+              <> · חשבון: <strong className="text-foreground">{result.destinationAccountName}</strong>
+                {result.autoRoutedAccount && (
+                  <span className="ms-1 inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    זוהה אוטומטית
+                  </span>
+                )}
+              </>
+            )}
           </p>
         </div>
       </div>

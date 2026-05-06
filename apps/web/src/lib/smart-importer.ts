@@ -62,6 +62,27 @@ export interface SmartImportResult {
   sampleRows: unknown[][];
   /** When needsManualMapping=true, this is the suspected header row. */
   detectedHeaderRowIndex: number;
+  /**
+   * Identifier extracted from the file that uniquely points to ONE
+   * account on the user's side — used for auto-routing the import
+   * without making the user pick an account each time.
+   *
+   * Per template:
+   *  - discount-key       → col [3] last-4 digits (e.g., "7627")
+   *  - il-cc-issuer-export→ trailing 4-digit token from col [5] wallet
+   *                          identifier (e.g., "GooglePay 9648" → "9648")
+   *  - il-cc-bank-export  → digits extracted from sheet name
+   *                          (e.g., "לאומי לישראל 669-4703428" → "6694703428")
+   *  - leumi              → null (current accounts have no per-row
+   *                          identifier; user must pick or set externalKey
+   *                          on the only checking account they own)
+   *  - tagged-export      → null (col [1] = account-name string, not a
+   *                          stable id; matched by name elsewhere)
+   *
+   * Importer compares this against `account.externalKey` (case &
+   * whitespace insensitive substring match) to find the destination.
+   */
+  accountKey: string | null;
 }
 
 function parseDateForTemplate(raw: unknown, fmt: string): string | null {
@@ -220,6 +241,7 @@ export async function smartImport(
       needsManualMapping: false,
       sampleRows: [],
       detectedHeaderRowIndex: 0,
+      accountKey: null,
     };
   }
 
@@ -252,6 +274,7 @@ export async function smartImport(
       needsManualMapping: true,
       sampleRows: firstRows.slice(0, 6),
       detectedHeaderRowIndex: findHeaderRow(firstRows),
+      accountKey: null,
     };
   }
 
@@ -447,6 +470,56 @@ export async function smartImport(
     }
   }
 
+  // ── Extract a single account identifier from the file for auto-routing.
+  // Per-template heuristics; null when nothing reliable was found. ─────────
+  let accountKey: string | null = null;
+  switch (template.id) {
+    case 'discount-key': {
+      // col [3] holds the card last-4 on EVERY data row. Should be one
+      // distinct value per file (single-card export); if there are
+      // multiple, leave null (multi-card files need explicit account).
+      const distinct = new Set<string>();
+      for (const sheet of sheetsToProcess) {
+        for (let i = 0; i < sheet.rows.length; i++) {
+          const r = sheet.rows[i];
+          if (!Array.isArray(r)) continue;
+          const v = String(r[3] ?? '').trim();
+          if (/^\d{4}$/.test(v)) distinct.add(v);
+        }
+      }
+      if (distinct.size === 1) accountKey = [...distinct][0]!;
+      break;
+    }
+    case 'il-cc-issuer-export': {
+      // col [5] = "GooglePay 9648" / "אינטרנט 3767" / similar. Pull the
+      // trailing 4-digit token. Aggregate across rows; require exactly
+      // one distinct identifier (single-card files).
+      const distinct = new Set<string>();
+      for (const sheet of sheetsToProcess) {
+        for (let i = 0; i < sheet.rows.length; i++) {
+          const r = sheet.rows[i];
+          if (!Array.isArray(r)) continue;
+          const cell = String(r[5] ?? '').trim();
+          const m = /(\d{4})\s*$/.exec(cell);
+          if (m) distinct.add(m[1]!);
+        }
+      }
+      if (distinct.size === 1) accountKey = [...distinct][0]!;
+      break;
+    }
+    case 'il-cc-bank-export': {
+      // The bank-portal exports name the sheet after the issuing bank +
+      // CC number, e.g. "לאומי לישראל 669-4703428" or
+      // "דיסקונט לישראל 55-103054393". Extract the digit run.
+      const sheetName = sheets[0]?.sheetName ?? '';
+      const m = /(\d[\d\-\s]+\d)/.exec(sheetName);
+      if (m) accountKey = m[1]!.replace(/[\s-]/g, '');
+      break;
+    }
+    // leumi (current accounts) and tagged-export don't carry a stable
+    // file-level identifier — user must select the account manually.
+  }
+
   return {
     success: transactions.length > 0,
     templateUsed: template,
@@ -456,6 +529,7 @@ export async function smartImport(
     needsManualMapping: false,
     sampleRows: sheets[0]!.rows.slice(firstHeaderRowIdx, firstHeaderRowIdx + 6),
     detectedHeaderRowIndex: firstHeaderRowIdx,
+    accountKey,
   };
 }
 

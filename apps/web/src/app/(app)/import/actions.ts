@@ -1129,6 +1129,12 @@ export interface BankExportImportResult {
    *  they're excluded from cash-flow totals — the granular detail comes
    *  from the matching CC excel file. Prevents double-counting. */
   ccSettlementsFlagged: number;
+  /** True when the destination account was inferred from the file's
+   *  identifier (no user pick needed). Surface in the UI so the user
+   *  knows we routed it automatically. */
+  autoRoutedAccount: boolean;
+  /** The account name the import landed in (for the result card). */
+  destinationAccountName: string | null;
   /** Imported transactions whose merchant matched an existing recurring
    *  pattern (so they'll show the קבוע badge). Lets the user see at-a-
    *  glance how much of the new import is recurring vs one-offs. */
@@ -1317,7 +1323,8 @@ function extractDistinctCards(buffer: Buffer): string[] {
 
 export async function importBankExport(formData: FormData): Promise<BankExportImportResult> {
   const file = formData.get('file');
-  const accountId = String(formData.get('accountId') ?? '').trim();
+  // accountId may be empty — we auto-route via account.externalKey when so.
+  const userPickedAccountId = String(formData.get('accountId') ?? '').trim();
 
   const empty = (msg: string, extra: Partial<BankExportImportResult> = {}): BankExportImportResult => ({
     ok: false, templateUsed: null, inserted: 0, duplicates: 0, upgradedDuplicates: 0,
@@ -1325,22 +1332,73 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     categorizedRows: 0, bankHintCategorized: 0, merchantKeywordCategorized: 0,
     taggedExportCategorized: 0, recurringPatternsCreated: 0, transferRows: 0,
     transferPairsLinked: 0, categoriesCreated: 0, ccSettlementsFlagged: 0,
+    autoRoutedAccount: false, destinationAccountName: null,
     matchedExistingRecurring: 0,
     newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
 
   if (!(file instanceof File) || file.size === 0) return empty('לא נבחר קובץ');
-  if (!accountId) return empty('יש לבחור חשבון');
 
   const ctx = await requireSession();
   const db = getDb();
+
+  // Parse the file FIRST so we have the accountKey for auto-routing.
+  // (Used to require accountId before parsing — flipped because the
+  // smartImport extract gives us the file's identifier without needing
+  // the account context.)
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const isExcel = /\.(xlsx|xls)$/i.test(file.name);
+  const parsedEarly = await smartImport(buffer, isExcel);
+
+  // ── Resolve destination account: user pick > auto-route via externalKey ─
+  let accountId = userPickedAccountId;
+  let autoRouted = false;
+  if (!accountId && parsedEarly.accountKey) {
+    // Find the household account whose externalKey matches the file's
+    // identifier (case + whitespace insensitive). Use a substring check
+    // so "9648" matches an account configured with "GooglePay 9648" or
+    // similar formatting variants.
+    const norm = (s: string | null | undefined) =>
+      String(s ?? '').toLowerCase().replace(/[\s\-]/g, '');
+    const fileKey = norm(parsedEarly.accountKey);
+    const candidates = await db
+      .select({
+        id: schema.accounts.id,
+        externalKey: schema.accounts.externalKey,
+      })
+      .from(schema.accounts)
+      .where(and(
+        eq(schema.accounts.householdId, ctx.householdId),
+        eq(schema.accounts.isActive, true),
+      ));
+    const hits = candidates.filter((a) => {
+      const acctKey = norm(a.externalKey);
+      if (!acctKey) return false;
+      return acctKey === fileKey || acctKey.includes(fileKey) || fileKey.includes(acctKey);
+    });
+    if (hits.length === 1) {
+      accountId = hits[0]!.id;
+      autoRouted = true;
+    } else if (hits.length > 1) {
+      return empty(
+        `זוהו ${hits.length} חשבונות התואמים את מזהה הקובץ "${parsedEarly.accountKey}". בחר חשבון מפורש.`,
+      );
+    }
+  }
+  if (!accountId) {
+    const hint = parsedEarly.accountKey
+      ? ` (מזהה בקובץ: ${parsedEarly.accountKey} — הגדר אותו כ-"מזהה חיצוני" באחד החשבונות לזיהוי אוטומטי)`
+      : '';
+    return empty(`יש לבחור חשבון${hint}`);
+  }
 
   // Verify the chosen account belongs to this household + grab its cutoff
   // for billing-month computation when the file doesn't carry a chargeDate.
   const [account] = await db
     .select({
       id: schema.accounts.id,
+      name: schema.accounts.name,
       cutoffDay: schema.accounts.cutoffDay,
       paymentSchedule: schema.accounts.paymentSchedule,
     })
@@ -1351,11 +1409,9 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     ))
     .limit(1);
   if (!account) return empty('החשבון שנבחר לא נמצא');
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const isExcel = /\.(xlsx|xls)$/i.test(file.name);
-
-  const parsed = await smartImport(buffer, isExcel);
+  // Re-use the parse from the auto-routing pass — no second smartImport
+  // call needed (parsing big Excel files isn't cheap).
+  const parsed = parsedEarly;
 
   if (parsed.needsManualMapping) {
     return empty('לא זוהה תבנית מתאימה לקובץ. ניתן להשתמש בייבוא הגנרי או להוסיף תבנית.', {
@@ -1939,6 +1995,8 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       categoriesCreated,
       ccSettlementsFlagged,
       matchedExistingRecurring,
+      autoRoutedAccount: autoRouted,
+      destinationAccountName: account.name,
       newPlansCreated,
       rowsLinkedToPlans,
       errors: parsed.errors,

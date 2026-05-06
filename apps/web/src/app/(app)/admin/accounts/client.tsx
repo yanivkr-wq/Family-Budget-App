@@ -31,6 +31,7 @@ export interface AccountRow {
   purpose: 'personal' | 'business' | 'shared';
   institution: string;
   accountNumberMasked: string | null;
+  externalKey: string | null;
   paymentSchedule: 'immediate' | 'monthly_billing';
   cutoffDay: number;
   chargeDay: number;
@@ -219,6 +220,21 @@ function AccountForm({
                 placeholder="****1234"
                 className="rounded-md border bg-background px-2 py-1.5 text-sm text-foreground"
               />
+            </label>
+
+            {/* External key — used by /import auto-routing */}
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground sm:col-span-2">
+              מזהה חיצוני (לזיהוי קבצי ייבוא אוטומטי)
+              <input
+                name="externalKey"
+                defaultValue={initial?.externalKey ?? ''}
+                placeholder='לדוגמה: 7627 (4 ספרות של כרטיס) או 669-4703428 (מספר חשבון בנק)'
+                className="rounded-md border bg-background px-2 py-1.5 text-sm text-foreground"
+              />
+              <span className="text-[10px] font-normal text-muted-foreground/80">
+                כשתעלה קובץ ב-/ייבוא ללא בחירת חשבון, נחפש את הערך הזה בתוך הקובץ ונחבר אוטומטית.
+                לכרטיסי אשראי — 4 ספרות אחרונות. לחשבונות בנק — מספר החשבון מהפורטל.
+              </span>
             </label>
 
             {/* Type */}

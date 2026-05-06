@@ -49,6 +49,21 @@ export const accounts = pgTable(
     chargeDay: integer().notNull().default(10),
     cutoffDay: integer().notNull().default(10), // 0 = always current month (banks); 1-28 for credit cards
     accountNumberMasked: text(), // last 4 digits only — for display
+    /**
+     * External identifier the bank/CC issuer uses in their export files.
+     * Used by the importer to AUTO-ROUTE files to the right account
+     * without forcing the user to pick from a dropdown each upload.
+     *
+     * Examples:
+     *  - CC last-4 digits: "7627" (Discount Key, Cal, Diners GooglePay)
+     *  - Wallet identifier suffix: "9648" (Cal "GooglePay 9648")
+     *  - Bank account number: "669-4703428" (Leumi/Discount checking)
+     *
+     * Matching is case/whitespace-insensitive substring against the
+     * identifier the parser extracts from each file. Set once per
+     * account in the admin UI.
+     */
+    externalKey: text(),
     currency: text().notNull().default('ILS'),
     isActive: boolean().notNull().default(true),
     lastScrapedAt: timestamp({ withTimezone: true }),
