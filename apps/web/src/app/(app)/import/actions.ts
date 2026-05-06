@@ -1149,66 +1149,71 @@ function hashRowId(date: string, chargeDate: string | null, amount: number, merc
  * Order matters within an array — earliest target wins if multiple exist.
  */
 const BANK_HINT_TO_OUR_CATEGORY: Array<{ pattern: RegExp; targets: string[] }> = [
-  // Food & dining
-  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות/i,
-    targets: ['מסעדות', 'אוכל בחוץ', 'מסעדות וקפה', 'אוכל'] },
-  // Groceries / supermarkets
-  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן/i,
-    targets: ['סופר', 'מזון', 'קניות מזון', 'סופרמרקט', 'מצרכים'] },
-  // Fuel / car
+  // Restaurants & cafes  → "מסעדות וקפה"
+  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות|מזנון|פיצריות?|המבורגר/i,
+    targets: ['מסעדות וקפה', 'מסעדות', 'אוכל בחוץ', 'אוכל'] },
+  // Groceries  → "מכולת ומזון"
+  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן|בשר|קצב/i,
+    targets: ['מכולת ומזון', 'מכולת', 'סופר', 'מזון', 'קניות מזון', 'סופרמרקט', 'מצרכים'] },
+  // Fuel / car  → "תחבורה"
   { pattern: /דלק|תדלוק|בנזין/i,
-    targets: ['דלק', 'רכב', 'תחבורה'] },
-  // Car / vehicle (non-fuel)
-  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6/i,
-    targets: ['רכב', 'תחבורה', 'הוצאות רכב'] },
-  // Public transport
-  { pattern: /תחבורה|רכבת|אוטובוס|רב\s*קו|מונית/i,
+    targets: ['תחבורה', 'דלק', 'רכב'] },
+  // Vehicle (non-fuel)  → "תחבורה"
+  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6|פנגו|טסט/i,
+    targets: ['תחבורה', 'רכב', 'הוצאות רכב'] },
+  // Public transport  → "תחבורה"
+  { pattern: /תחבורה|רכבת|אוטובוס|רב\s*קו|מונית|גט/i,
     targets: ['תחבורה', 'תחבורה ציבורית'] },
-  // Utilities / household bills
-  { pattern: /חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר/i,
-    targets: ['חשבונות', 'שירותים', 'בית', 'דיור'] },
-  // Communications
-  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה/i,
+  // Utilities / household bills  → "בית ומשק"
+  { pattern: /חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר|חברת\s*חשמל|חשבונית/i,
+    targets: ['בית ומשק', 'חשבונות', 'שירותים', 'בית', 'דיור'] },
+  // Communications  → "תקשורת"
+  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה|פלאפון|פרטנר|הוט|בזק|סלקום|yes/i,
     targets: ['תקשורת', 'תקשורת וטלוויזיה'] },
-  // Insurance
+  // Insurance  → "הלוואות וחיסכון" (closest catch-all in their setup)
   { pattern: /ביטוח/i,
-    targets: ['ביטוח', 'ביטוחים'] },
-  // Health / pharmacy
-  { pattern: /בריאות|רפואה|רוקחות|בית\s*מרקחת|פארם|רופא|קופ.?ח/i,
+    targets: ['ביטוח', 'ביטוחים', 'הלוואות וחיסכון'] },
+  // Loans / savings / financial  → "הלוואות וחיסכון"
+  { pattern: /הלוואה|הלוואת|משכנתא|חיסכון|הפקדה|השקעה|קרן|קופת\s*גמל|בנק/i,
+    targets: ['הלוואות וחיסכון', 'הלוואות', 'חיסכון'] },
+  // Health / pharmacy  → "בריאות"
+  { pattern: /בריאות|רפואה|רוקחות|בית\s*מרקחת|פארם|רופא|קופ.?ח|סופר[-\s]פארם|קופת\s*חולים/i,
     targets: ['בריאות', 'רפואה'] },
-  // Clothing / fashion
+  // Clothing / fashion  → "אחר" (no dedicated category)
   { pattern: /ביגוד|אופנה|בגדים|הנעלה|נעליים/i,
-    targets: ['ביגוד', 'ביגוד והנעלה', 'אופנה'] },
-  // Beauty / personal
+    targets: ['ביגוד', 'ביגוד והנעלה', 'אופנה', 'אחר'] },
+  // Beauty / personal  → "אחר"
   { pattern: /יופי|טיפוח|קוסמטיקה|מספרה|ספא/i,
-    targets: ['טיפוח', 'יופי', 'אישי'] },
-  // Entertainment / leisure
-  { pattern: /בידור|פנאי|תרבות|קולנוע|תיאטרון|הופעה|מנוי|סטרימינג|נטפליקס|ספוטיפיי/i,
-    targets: ['בילוי', 'בידור', 'פנאי', 'בילויים'] },
-  // Travel / vacation
-  { pattern: /חופשה|נסיעות|תיירות|טיסות|מלון|חו["'״]?ל/i,
-    targets: ['טיולים', 'חופשות', 'נסיעות', 'נופש'] },
-  // Education
-  { pattern: /חינוך|לימודים|בית\s*ספר|גן\s*ילדים|חוגים|ספרים/i,
-    targets: ['חינוך', 'ילדים', 'לימודים'] },
-  // Kids
-  { pattern: /ילדים|תינוק|צעצועים/i,
-    targets: ['ילדים', 'משפחה'] },
-  // Home / furniture / improvement
-  { pattern: /בית|ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים/i,
-    targets: ['בית', 'דיור', 'ריהוט'] },
-  // Electronics / tech
-  { pattern: /אלקטרוניקה|מחשבים|טכנולוגיה|מוצרי\s*חשמל/i,
-    targets: ['אלקטרוניקה', 'טכנולוגיה', 'בית'] },
-  // Charity
+    targets: ['טיפוח', 'יופי', 'אישי', 'אחר'] },
+  // Entertainment / leisure  → "בילוי ופנאי"
+  { pattern: /בידור|פנאי|תרבות|קולנוע|תיאטרון|הופעה|מנוי|סטרימינג|נטפליקס|ספוטיפיי|spotify|netflix|youtube|disney|חדר\s*בריחה|spa/i,
+    targets: ['בילוי ופנאי', 'בילוי', 'בידור', 'פנאי', 'בילויים'] },
+  // Travel / vacation  → "נסיעות וחופשות"
+  { pattern: /חופשה|נסיעות|תיירות|טיסות|מלון|חו["'״]?ל|airbnb|booking|expedia|airline/i,
+    targets: ['נסיעות וחופשות', 'טיולים', 'חופשות', 'נסיעות', 'נופש'] },
+  // Education  → "ילדים וחינוך"
+  { pattern: /חינוך|לימודים|בית\s*ספר|גן\s*ילדים|חוגים|ספרים|אוניברס|מכללה|גן/i,
+    targets: ['ילדים וחינוך', 'חינוך', 'לימודים'] },
+  // Kids  → "ילדים וחינוך"
+  { pattern: /ילדים|תינוק|צעצועים|פעוטון|קייטנה/i,
+    targets: ['ילדים וחינוך', 'ילדים', 'משפחה'] },
+  // Home goods / furniture  → "בית ומשק"
+  { pattern: /ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים|איקאה|ace|הום\s*סנטר/i,
+    targets: ['בית ומשק', 'בית', 'דיור', 'ריהוט'] },
+  // Electronics / tech  → "אחר"
+  { pattern: /אלקטרוניקה|מחשבים|טכנולוגיה|מוצרי\s*חשמל|ksp|איי-דיגיטל/i,
+    targets: ['אלקטרוניקה', 'טכנולוגיה', 'אחר'] },
+  // Charity  → "אחר"
   { pattern: /צדקה|תרומה|תרומות/i,
-    targets: ['צדקה', 'תרומות'] },
-  // Pets
+    targets: ['צדקה', 'תרומות', 'אחר'] },
+  // Pets  → "אחר"
   { pattern: /חיות\s*מחמד|וטרינר|כלב|חתול/i,
-    targets: ['חיות מחמד', 'בעלי חיים'] },
-  // ATM / cash withdrawals — leave uncategorized; caller can rule it
-  // Income hints — usually not in CC files but harmless
-  { pattern: /משכורת|שכר|הכנסה/i,
+    targets: ['חיות מחמד', 'בעלי חיים', 'אחר'] },
+  // ATM / cash withdrawals  → "כספומט"
+  { pattern: /כספומט|משיכת\s*מזומן|atm|מזומן/i,
+    targets: ['כספומט'] },
+  // Income (rare in CC files but harmless)  → "הכנסות"
+  { pattern: /משכורת|שכר|הכנסה|העברה\s*נכנסת|זיכוי/i,
     targets: ['הכנסות', 'משכורת'] },
 ];
 
