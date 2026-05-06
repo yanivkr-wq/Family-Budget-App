@@ -262,7 +262,17 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-1 flex-wrap">
             <span className="pill text-xs whitespace-nowrap" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
-            {/* Source badge — exactly one fires. Order = priority. */}
+            {/* Source badge — only INTERESTING sources get a badge:
+             *   • rule           → user-defined intent worth surfacing
+             *   • tagged_export  → file came pre-tagged (user trust signal)
+             *   • llm            → AI involvement worth flagging
+             * Hidden (since they're the default for any imported transaction
+             * and were just adding noise to most rows):
+             *   • bank_hint           (the bank's own ענף column)
+             *   • merchant_keyword    (heuristic keyword scan)
+             * The underlying source value is still stored in the DB for
+             * diagnostics — this just suppresses the badge.
+             */}
             {isAutoRule && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" title={`כלל: ${t.ruleName ?? 'ללא שם'}`}>
                 <Zap className="size-2.5" />כלל
@@ -273,21 +283,14 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
                 <UserCheck className="size-2.5" />תיוג ידני
               </span>
             )}
-            {isBankHint && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="קטגוריה לפי עמודת ענף של הבנק/חברת האשראי">
-                <Landmark className="size-2.5" />ענף בנק
-              </span>
-            )}
-            {isMerchantKeyword && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-teal-100 px-1.5 py-0.5 text-[10px] font-medium text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="קטגוריה לפי מילת מפתח בשם בית העסק">
-                <Search className="size-2.5" />אוטומטי
-              </span>
-            )}
             {isLlm && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="הוצע על ידי AI">
                 <Sparkles className="size-2.5" />AI
               </span>
             )}
+            {/* Suppress unused-import warnings for the symbols we now hide. */}
+            {false && isBankHint && <Landmark className="hidden" />}
+            {false && isMerchantKeyword && <Search className="hidden" />}
           </div>
           {subCat && <span className="text-[11px] text-muted-foreground">↳ {subCat.nameHe}</span>}
         </div>

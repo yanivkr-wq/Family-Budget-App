@@ -291,9 +291,23 @@ export async function smartImport(
       if (!hasContent) continue;
 
       // Pull notes early so we can short-circuit on pending markers.
-      const notes = cols.notes !== undefined
-        ? String(row[cols.notes] ?? '').trim() || null
-        : null;
+      // Some banks dump system labels into the notes column (Discount Key
+      // writes "הוראת קבע" / "חיוב עסקת חו\"ל בש\"ח" / similar). The user
+      // doesn't want these in their personal notes — strip them out.
+      // Anything left after stripping (real installment markers, user-
+      // entered text) is preserved.
+      const NOISE_NOTES = new Set([
+        'הוראת קבע',
+        'חיוב חודשי',
+        'חיוב עסקות מיידי',
+        'חיוב עסקת חו"ל בש"ח',
+        'חיוב עסקת חוץ-לארץ בש"ח',
+      ]);
+      let notes: string | null = null;
+      if (cols.notes !== undefined) {
+        const raw = String(row[cols.notes] ?? '').trim();
+        if (raw && !NOISE_NOTES.has(raw)) notes = raw;
+      }
 
       // Silent skip for pending rows ("עסקה בקליטה" in Format A files).
       if (handling.pendingNotesMarker && notes && notes.includes(handling.pendingNotesMarker)) {
