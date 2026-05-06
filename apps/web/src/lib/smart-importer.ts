@@ -519,16 +519,24 @@ export async function smartImport(
       void sheetIsForex; // (consumed in chargeDate calc below)
 
       // chargeDate resolution priority:
-      //   1. Per-row column (Format B)
-      //   2. Forex OR foreign-merchant sheet → equals transactionDate
-      //      (Israeli CCs charge these immediately, not on the next cycle)
-      //   3. Global header date (Format A)
-      //   4. null (calculated later from billing-cycle logic)
+      //   1. FOREX (or foreign-merchant sheet) → ALWAYS equals
+      //      transactionDate. Israeli CCs settle forex immediately on
+      //      the user's bank account regardless of what the issuer's
+      //      file claims in its chargeDate column. Some issuer-portal
+      //      exports lump forex with the monthly batch (chargeDate = the
+      //      10th); we override that here so cash flow shows the actual
+      //      withdrawal day.
+      //   2. Per-row chargeDate column (Format B exports — the bank
+      //      gives a real per-row charge date for non-forex rows)
+      //   3. Global header date (Format A — single charge date stamped
+      //      at the top of the file)
+      //   4. null → caller computes from billing-cycle logic
       let chargeDate: string | null = null;
-      if (cols.chargeDate !== undefined) {
+      if (isForex || sheetIsForex) {
+        chargeDate = txnDate;
+      } else if (cols.chargeDate !== undefined) {
         chargeDate = parseDateForTemplate(row[cols.chargeDate], resolvedDateFormat);
       }
-      if (!chargeDate && (isForex || sheetIsForex)) chargeDate = txnDate;
       if (!chargeDate && globalChargeDate) chargeDate = globalChargeDate;
 
       const categoryHint = cols.categoryHint !== undefined
