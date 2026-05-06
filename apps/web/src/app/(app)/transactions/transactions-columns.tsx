@@ -52,7 +52,8 @@ export type ColumnId =
   | 'category'
   | 'expense'
   | 'income'
-  | 'notes';
+  | 'notes'
+  | 'rule';
 
 interface Cat { id: string; nameHe: string; color?: string | null }
 interface Account { id: string; name: string; type?: string }
@@ -69,6 +70,7 @@ export interface CellContext {
     notes: string | null;
     categorySource?: string | null;
     ruleName?: string | null;
+    appliedRuleId?: string | null;
     isManual?: boolean;
     installmentPlanId?: string | null;
     installmentCurrentPaymentNo?: number | null;
@@ -257,46 +259,20 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
-    renderCell: ({ t, cat, subCat, isAutoRule, isBankHint, isMerchantKeyword, isTaggedExport, isLlm }) =>
-      cat ? (
+    // The rule / source badges that used to live here moved to their own
+    // 'rule' column at the end of the table. Category column is now just
+    // the colored pill + optional sub-category subtitle.
+    renderCell: ({ cat, subCat, isAutoRule, isBankHint, isMerchantKeyword, isTaggedExport, isLlm }) => {
+      void isAutoRule; void isBankHint; void isMerchantKeyword; void isTaggedExport; void isLlm;
+      return cat ? (
         <div className="flex flex-col gap-0.5">
-          <div className="flex items-center gap-1 flex-wrap">
-            <span className="pill text-xs whitespace-nowrap" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
-            {/* Source indicator — text label for INTENTIONAL sources, small
-             * icon-only dot for the auto-categorization fallbacks. Order
-             * matches priority (rule → tagged → bank-hint → keyword → llm).
-             */}
-            {isAutoRule && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" title={`כלל: ${t.ruleName ?? 'ללא שם'}`}>
-                <Zap className="size-2.5" />כלל
-              </span>
-            )}
-            {isTaggedExport && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" title="קטגוריה הגיעה מהקובץ עצמו (תיוג ידני בקובץ המקור)">
-                <UserCheck className="size-2.5" />תיוג ידני
-              </span>
-            )}
-            {isBankHint && (
-              <span className="inline-flex items-center justify-center size-4 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="קטגוריה לפי עמודת ענף של הבנק/חברת האשראי">
-                <Landmark className="size-2.5" />
-              </span>
-            )}
-            {isMerchantKeyword && (
-              <span className="inline-flex items-center justify-center size-4 rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="קטגוריה לפי מילת מפתח בשם בית העסק">
-                <Search className="size-2.5" />
-              </span>
-            )}
-            {isLlm && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="הוצע על ידי AI">
-                <Sparkles className="size-2.5" />AI
-              </span>
-            )}
-          </div>
+          <span className="pill text-xs whitespace-nowrap" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
           {subCat && <span className="text-[11px] text-muted-foreground">↳ {subCat.nameHe}</span>}
         </div>
       ) : (
         <span className="text-muted-foreground">—</span>
-      ),
+      );
+    },
   },
 
   expense: {
@@ -325,9 +301,66 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     cellClass: 'max-w-xs truncate px-3 py-2 align-top text-muted-foreground',
     renderCell: ({ t }) => <span title={t.notes ?? ''}>{t.notes}</span>,
   },
+
+  rule: {
+    id: 'rule',
+    label: 'כלל',
+    defaultVisible: true,
+    headClass: 'border-b px-3 py-2 font-medium',
+    cellClass: 'px-3 py-2 align-top',
+    // Source-of-categorization indicator. Real user rules get a clickable
+    // pill linking to /admin/rules?edit=<id> (which auto-opens the edit
+    // modal). Auto-categorization sources show a small icon-only dot for
+    // diagnostic purposes — they're not editable from here, but you can
+    // see at a glance HOW each transaction got its category.
+    renderCell: ({ t, isAutoRule, isBankHint, isMerchantKeyword, isTaggedExport, isLlm }) => {
+      if (isAutoRule && t.appliedRuleId) {
+        return (
+          <Link
+            href={`/admin/rules?edit=${t.appliedRuleId}`}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-200 dark:bg-sky-900/40 dark:text-sky-300"
+            title={`לחץ כדי לערוך את הכלל: ${t.ruleName ?? ''}`}
+          >
+            <Zap className="size-2.5" />
+            <span className="max-w-[12rem] truncate">{t.ruleName ?? 'כלל'}</span>
+          </Link>
+        );
+      }
+      if (isTaggedExport) {
+        return (
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" title="קטגוריה הגיעה מהקובץ עצמו (תיוג ידני בקובץ המקור)">
+            <UserCheck className="size-2.5" />תיוג ידני
+          </span>
+        );
+      }
+      if (isLlm) {
+        return (
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="הוצע על ידי AI">
+            <Sparkles className="size-2.5" />AI
+          </span>
+        );
+      }
+      if (isBankHint) {
+        return (
+          <span className="inline-flex items-center justify-center size-5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="קטגוריה לפי עמודת ענף של הבנק/חברת האשראי">
+            <Landmark className="size-3" />
+          </span>
+        );
+      }
+      if (isMerchantKeyword) {
+        return (
+          <span className="inline-flex items-center justify-center size-5 rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="קטגוריה לפי מילת מפתח בשם בית העסק">
+            <Search className="size-3" />
+          </span>
+        );
+      }
+      return <span className="text-muted-foreground">—</span>;
+    },
+  },
 };
 
-export const DEFAULT_ORDER: ColumnId[] = ['date', 'merchant', 'flag', 'account', 'source', 'category', 'expense', 'income', 'notes'];
+export const DEFAULT_ORDER: ColumnId[] = ['date', 'merchant', 'flag', 'account', 'source', 'category', 'expense', 'income', 'notes', 'rule'];
 
 // ─── Hook: load/save user prefs from localStorage ────────────────────────────
 
@@ -471,7 +504,12 @@ export function ColumnResizeHandle({
       ref={handleRef}
       onPointerDown={onPointerDown}
       onDoubleClick={onReset}
-      className="absolute top-0 bottom-0 -start-1 w-2 cursor-col-resize select-none touch-none hover:bg-primary/30 active:bg-primary/60"
+      // -end-1 puts the handle on the BOUNDARY between this column and the
+      // next one. In RTL the next column is to the LEFT, so the handle
+      // visually sits on the column's left edge — which is what the user
+      // expects to drag. Tailwind translates -end → -right in LTR, -left
+      // in RTL automatically. 3px wide so it's easy to grab.
+      className="absolute top-0 bottom-0 -end-[2px] w-[3px] cursor-col-resize select-none touch-none bg-border/50 hover:bg-primary/60 active:bg-primary"
       title="גרור כדי לשנות רוחב, דאבל-קליק לאיפוס"
       aria-label="שנה רוחב עמודה"
     />

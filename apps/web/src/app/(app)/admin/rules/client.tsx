@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   createRule,
   updateRule,
@@ -71,6 +72,16 @@ export function RulesAdminClient(props: {
   accounts: Account[];
 }) {
   const [editing, setEditing] = useState<Rule | 'new' | null>(null);
+  // Deep-link support: ?edit=<ruleId> auto-opens the edit modal for that
+  // rule. Used by the clickable "כלל" pill on /transactions so the user
+  // can jump directly from a tagged transaction to its rule editor.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const rule = props.rules.find((r) => r.id === editId);
+    if (rule) setEditing(rule);
+  }, [searchParams, props.rules]);
   const [showNlModal, setShowNlModal] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
