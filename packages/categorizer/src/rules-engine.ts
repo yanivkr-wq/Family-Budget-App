@@ -53,21 +53,33 @@ export function matchRule(rule: CategoryRule, input: RuleMatchInput): boolean {
   }
 
   const haystack = input.merchantNormalized;
-  const pattern = rule.pattern.toLowerCase();
+  // Multi-pattern support: a pipe-separated pattern like "חניה|חניון|חניוני"
+  // means "match if ANY of these substrings appear" (for `contains` /
+  // `starts_with`) or "match if ANY equals exactly" (for `exact`).
+  // Lets the user collapse multiple near-synonyms into one rule. Backwards
+  // compatible: a pattern with no `|` behaves exactly as before.
+  // Empty segments (e.g., "|||" or trailing `|`) are filtered out.
+  const patternParts = rule.pattern
+    .split('|')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
 
   // Primary match (merchant)
   let merchantMatch: boolean;
   switch (rule.matchType) {
     case 'contains':
-      merchantMatch = haystack.includes(pattern);
+      merchantMatch = patternParts.some((p) => haystack.includes(p));
       break;
     case 'starts_with':
-      merchantMatch = haystack.startsWith(pattern);
+      merchantMatch = patternParts.some((p) => haystack.startsWith(p));
       break;
     case 'exact':
-      merchantMatch = haystack === pattern;
+      merchantMatch = patternParts.some((p) => haystack === p);
       break;
     case 'regex':
+      // For regex, the user can already use alternation in the pattern
+      // itself ((?:foo|bar)) so we don't pre-split — preserves their
+      // intent if they wrote a regex with literal | characters.
       try {
         merchantMatch = new RegExp(rule.pattern, 'i').test(input.merchantRaw);
       } catch {

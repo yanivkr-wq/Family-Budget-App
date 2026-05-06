@@ -225,7 +225,11 @@ export function TransactionsList(props: {
       )}
 
       {props.transactions.length > 0 && (
-        <section className="rounded-lg border bg-card">
+        // overflow-x-auto on the section so the table can scroll horizontally
+        // while the sticky END column (actions) stays pinned to the leading
+        // edge. Without this the table just expands the parent and there's
+        // no scroll for the sticky to anchor against.
+        <section className="rounded-lg border bg-card overflow-x-auto">
           {/* On screens >=lg the cells switch to whitespace-nowrap so wide
               monitors actually USE the horizontal real estate instead of
               wrapping Hebrew text mid-column. notes column still truncates
@@ -259,8 +263,12 @@ export function TransactionsList(props: {
                 })}
                 {/* Action column header — also hosts the "עמודות" button so
                     the customizer is always reachable from the table chrome
-                    itself, not from a separate toolbar above. */}
-                <th className="border-b px-3 py-2">
+                    itself, not from a separate toolbar above.
+                    STICKY in the END direction (= visual-left in RTL) so
+                    horizontal-scrolling content slides UNDER it instead of
+                    overlapping. z-30 puts it above the sticky thead row's
+                    z-20. Solid bg-card + a leading shadow visually pin it. */}
+                <th className="sticky end-0 z-30 border-b border-s bg-muted/95 backdrop-blur px-3 py-2 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]">
                   <div className="flex items-center justify-end">
                     <button
                       type="button"
@@ -392,8 +400,12 @@ export function TransactionsList(props: {
                         );
                       })}
 
-                      {/* Action buttons (always-on bookend) */}
-                      <td className="px-3 py-2 align-middle">
+                      {/* Action buttons (always-on bookend) — STICKY in
+                          end direction so horizontal scroll slides table
+                          cells UNDER instead of overlapping the controls.
+                          Solid bg + leading shadow matches the sticky
+                          header's visual treatment. */}
+                      <td className="sticky end-0 z-10 border-s bg-card align-middle px-3 py-2 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]">
                         <div className="flex items-center justify-end gap-1">
                           <button type="button" onClick={() => setEditTxnId(t.id)} className="rounded-md p-1.5 text-foreground/70 hover:bg-accent/40" title="ערוך תנועה" aria-label="ערוך תנועה">
                             <Pencil className="size-3.5" />

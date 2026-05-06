@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { and, eq, ilike, isNull, or, sql, inArray } from 'drizzle-orm';
+import { and, eq, ilike, isNull, or, sql, inArray, type SQL } from 'drizzle-orm';
 import { getDb, schema, normalizeMerchant } from '@fba/db';
 import { auth } from '@/lib/auth';
 
@@ -105,22 +105,20 @@ async function createRecurringFromRule(
   let merchantList: string[] = [];
 
   if (rule.matchType === 'exact') {
-    merchantList = [normalizeMerchant(rule.pattern)];
+    // For exact-match rules with multiple parts (e.g., "spotify|netflix"),
+    // materialize each part as its own recurring entry.
+    merchantList = splitPatternParts(rule.pattern).map((p) => normalizeMerchant(p));
+    if (merchantList.length === 0) merchantList = [normalizeMerchant(rule.pattern)];
   } else {
     // Pull distinct merchantNormalized values from existing matching txns.
-    // Using the same predicates as the rules engine for consistency.
-    const lcPattern = rule.pattern.toLowerCase();
+    // Using the same predicates as the rules engine for consistency
+    // (including pipe-separated multi-pattern support).
     const conditions = [
       eq(schema.transactions.householdId, householdId),
       isNull(schema.transactions.deletedAt),
     ];
-    if (rule.matchType === 'contains') {
-      conditions.push(ilike(schema.transactions.merchantNormalized, `%${lcPattern}%`));
-    } else if (rule.matchType === 'starts_with') {
-      conditions.push(ilike(schema.transactions.merchantNormalized, `${lcPattern}%`));
-    } else if (rule.matchType === 'regex') {
-      conditions.push(sql`${schema.transactions.merchantRaw} ~* ${rule.pattern}`);
-    }
+    const patternCond = buildMerchantPatternCondition(rule.pattern, rule.matchType as 'contains' | 'starts_with' | 'exact' | 'regex');
+    if (patternCond) conditions.push(patternCond);
     const rows = await db
       .selectDistinct({ m: schema.transactions.merchantNormalized })
       .from(schema.transactions)
@@ -155,6 +153,42 @@ async function createRecurringFromRule(
     if (result.length > 0) created++;
   }
   return created;
+}
+
+/**
+ * Split a pipe-separated pattern into trimmed lowercase parts. Empty parts
+ * are filtered out. Used by the multi-pattern matcher so `applyRules` and
+ * the SQL preview/backfill paths agree on what a rule like
+ * "חניה|חניון|חניוני" actually matches.
+ */
+function splitPatternParts(pattern: string): string[] {
+  return pattern
+    .split('|')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Build a SQL OR condition that matches when any of the pipe-separated
+ * pattern parts hits, using the same matchType semantics as the engine.
+ * Falls back to the single-pattern path when there's only one part.
+ */
+function buildMerchantPatternCondition(
+  pattern: string,
+  matchType: 'contains' | 'starts_with' | 'exact' | 'regex',
+): SQL | undefined {
+  if (matchType === 'regex') {
+    return sql`${schema.transactions.merchantRaw} ~* ${pattern}`;
+  }
+  const parts = splitPatternParts(pattern);
+  if (parts.length === 0) return undefined;
+  const perPart = parts.map((p): SQL => {
+    if (matchType === 'starts_with') return ilike(schema.transactions.merchantNormalized, `${p}%`);
+    if (matchType === 'exact')       return eq(schema.transactions.merchantNormalized, p);
+    return ilike(schema.transactions.merchantNormalized, `%${p}%`);
+  });
+  if (perPart.length === 1) return perPart[0]!;
+  return or(...perPart);
 }
 
 /** Build a Drizzle SQL condition for a notes-pattern match. Returns null if no pattern set. */
@@ -198,17 +232,9 @@ export async function previewRule(formData: FormData): Promise<RulePreview> {
     eq(schema.transactions.isProjected, false),
   ];
 
-  // Pattern match
-  const lcPattern = r.pattern.toLowerCase();
-  if (r.matchType === 'contains') {
-    conditions.push(ilike(schema.transactions.merchantNormalized, `%${lcPattern}%`));
-  } else if (r.matchType === 'starts_with') {
-    conditions.push(ilike(schema.transactions.merchantNormalized, `${lcPattern}%`));
-  } else if (r.matchType === 'exact') {
-    conditions.push(eq(schema.transactions.merchantNormalized, lcPattern));
-  } else if (r.matchType === 'regex') {
-    conditions.push(sql`${schema.transactions.merchantRaw} ~* ${r.pattern}`);
-  }
+  // Pattern match (supports pipe-separated multi-patterns)
+  const patternCond = buildMerchantPatternCondition(r.pattern, r.matchType);
+  if (patternCond) conditions.push(patternCond);
 
   if (r.appliesToAccountId) {
     conditions.push(eq(schema.transactions.accountId, r.appliesToAccountId));
@@ -489,16 +515,8 @@ export async function applyRuleToPastTransactions(ruleId: string): Promise<{ ok:
     eq(schema.transactions.householdId, session.user.householdId),
     isNull(schema.transactions.deletedAt),
   ];
-  const lcPattern = rule.pattern.toLowerCase();
-  if (rule.matchType === 'contains') {
-    conditions.push(ilike(schema.transactions.merchantNormalized, `%${lcPattern}%`));
-  } else if (rule.matchType === 'starts_with') {
-    conditions.push(ilike(schema.transactions.merchantNormalized, `${lcPattern}%`));
-  } else if (rule.matchType === 'exact') {
-    conditions.push(eq(schema.transactions.merchantNormalized, lcPattern));
-  } else if (rule.matchType === 'regex') {
-    conditions.push(sql`${schema.transactions.merchantRaw} ~* ${rule.pattern}`);
-  }
+  const patternCond = buildMerchantPatternCondition(rule.pattern, rule.matchType as 'contains' | 'starts_with' | 'exact' | 'regex');
+  if (patternCond) conditions.push(patternCond);
   if (rule.appliesToAccountId) {
     conditions.push(eq(schema.transactions.accountId, rule.appliesToAccountId));
   }

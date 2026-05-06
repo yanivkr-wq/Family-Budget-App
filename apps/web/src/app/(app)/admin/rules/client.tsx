@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   createRule,
   updateRule,
@@ -75,13 +75,32 @@ export function RulesAdminClient(props: {
   // Deep-link support: ?edit=<ruleId> auto-opens the edit modal for that
   // rule. Used by the clickable "כלל" pill on /transactions so the user
   // can jump directly from a tagged transaction to its rule editor.
+  // openedViaDeepLink remembers we got here via the URL so on close we
+  // can navigate BACK to the previous page (typically /transactions)
+  // instead of stranding the user on /admin/rules.
+  const router = useRouter();
   const searchParams = useSearchParams();
+  const openedViaDeepLink = useRef(false);
   useEffect(() => {
     const editId = searchParams.get('edit');
     if (!editId) return;
     const rule = props.rules.find((r) => r.id === editId);
-    if (rule) setEditing(rule);
+    if (rule) {
+      setEditing(rule);
+      openedViaDeepLink.current = true;
+    }
   }, [searchParams, props.rules]);
+
+  function closeEditModal() {
+    setEditing(null);
+    if (openedViaDeepLink.current) {
+      openedViaDeepLink.current = false;
+      // history.back() returns to wherever the user was — usually
+      // /transactions. Falls back gracefully if there's nothing to go
+      // back to (e.g., the tab was opened directly to this URL).
+      router.back();
+    }
+  }
   const [showNlModal, setShowNlModal] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
@@ -320,7 +339,7 @@ export function RulesAdminClient(props: {
           topCategories={props.topCategories}
           subCategories={props.subCategories}
           accounts={props.accounts}
-          onClose={() => setEditing(null)}
+          onClose={closeEditModal}
         />
       )}
     </div>
@@ -481,7 +500,10 @@ function RuleEditModal(props: {
           </div>
           <div className="space-y-1">
             <label className="form-label">דפוס בית עסק *</label>
-            <input value={pattern} onChange={(e) => setPattern(e.target.value)} required className="form-input" placeholder="למשל: שופרסל" />
+            <input value={pattern} onChange={(e) => setPattern(e.target.value)} required className="form-input" placeholder="למשל: שופרסל   או: חניה|חניון|חניוני" />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              ניתן להפריד מספר ביטויים עם <code className="rounded bg-muted px-1">|</code> — הכלל יתאים אם <strong>אחד מהם</strong> מופיע (למשל: <code className="rounded bg-muted px-1">חניה|חניון|חניוני</code>).
+            </p>
           </div>
 
           {/* ── Notes AND-condition ── */}
