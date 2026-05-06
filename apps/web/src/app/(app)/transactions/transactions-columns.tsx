@@ -375,7 +375,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
       }
       if (isLlm) {
         return (
-          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="הוצע על ידי AI">
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="תוייג על ידי AI במהלך הייבוא — נוצר כלל אוטומטי לעתיד">
             <Sparkles className="size-2.5" />AI
           </span>
         );
