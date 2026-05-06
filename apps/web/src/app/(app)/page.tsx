@@ -275,8 +275,12 @@ export default async function DashboardPage(props: {
 
   // ── Parallel 3: insights-only queries (non-blocking for main render) ───────
   const prevMonth = addMonths(month, -1);
+  // All three queries below now respect the active view tab so insights
+  // change correctly when switching אישי / עסקי / משולב. Without the
+  // accountFilter, MoM comparison and installment plans were aggregated
+  // across ALL accounts regardless of which view the user picked.
   const [prevTotals, endingPlans, activeInstallmentPlans] = await Promise.all([
-    // (i) last month category totals — for MoM comparison
+    // (i) last month category totals — for MoM comparison (view-scoped)
     db
       .select({
         total:      sql<string>`coalesce(sum(${schema.transactions.amountIls}), 0)`,
@@ -289,11 +293,14 @@ export default async function DashboardPage(props: {
           eq(schema.transactions.billingMonth, prevMonth),
           isNull(schema.transactions.deletedAt),
           eq(schema.transactions.isProjected, false),
+          accountFilter !== null
+            ? inArray(schema.transactions.accountId, accountFilter)
+            : undefined,
         ),
       )
       .groupBy(schema.transactions.categoryId),
 
-    // (j) active installment plans ending this month or next month
+    // (j) active installment plans ending this month or next month (view-scoped)
     db
       .select({
         id:                schema.installmentPlans.id,
@@ -309,10 +316,13 @@ export default async function DashboardPage(props: {
         and(
           eq(schema.installmentPlans.householdId, householdId),
           eq(schema.installmentPlans.status, 'active'),
+          accountFilter !== null
+            ? inArray(schema.installmentPlans.accountId, accountFilter)
+            : undefined,
         ),
       ),
 
-    // (k) all active installment plans (for "not in transactions" warning)
+    // (k) all active installment plans (for "not in transactions" warning, view-scoped)
     db
       .select({
         id:               schema.installmentPlans.id,
@@ -335,6 +345,9 @@ export default async function DashboardPage(props: {
         and(
           eq(schema.installmentPlans.householdId, householdId),
           eq(schema.installmentPlans.status, 'active'),
+          accountFilter !== null
+            ? inArray(schema.installmentPlans.accountId, accountFilter)
+            : undefined,
         ),
       ),
   ]);
@@ -575,6 +588,23 @@ export default async function DashboardPage(props: {
               : projectedThisMonth > 0
                 ? 'תקציב צפוי לחודש'
                 : undefined
+          }
+          info={
+            isCurrentMonth && hasEnoughDataForProjection
+              ? 'איך החישוב עובד:\n' +
+                '1. ממוצע יומי = סה"כ הוצאות החודש עד היום ÷ מספר הימים שעברו.\n' +
+                '2. תחזית הוצאות לסוף חודש = הוצאות עד עכשיו + (ממוצע יומי × הימים שנותרו).\n' +
+                '3. תחזית מאזן = הכנסות החודש − תחזית הוצאות.\n' +
+                '\n' +
+                'הערה: זו אקסטרפולציה לינארית פשוטה — לא מתחשבת בקצב ' +
+                'משתנה במהלך החודש. הסכום מתעדכן בזמן אמת ככל שמתווספות תנועות. ' +
+                'התחזית פעילה רק כשעברו ≥5 ימים בחודש ויש ≥3 תנועות (כדי לא ' +
+                'לחזות על בסיס דגימה קטנה מדי).'
+              : isCurrentMonth
+                ? 'אין עדיין מספיק נתונים לתחזית — נציג אותה כשיהיו ≥5 ימים בחודש ' +
+                  'ו-≥3 תנועות. בינתיים מוצג המאזן בפועל (הכנסות פחות הוצאות).'
+                : 'סך התנועות שמסומנות "מתוכנן" לחודש שצפית — בעיקר תוכניות ' +
+                  'תשלומים והוצאות קבועות שעדיין לא חוייבו.'
           }
         />
         {/* Recurring monthly — total of all active recurring patterns,
