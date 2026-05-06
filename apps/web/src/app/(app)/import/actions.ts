@@ -1179,19 +1179,25 @@ function hashRowId(date: string, chargeDate: string | null, amount: number, merc
  * sees "↔ העברה" on the row and can fix), false negatives cause double
  * counting which is harder to spot.
  */
+// IMPORTANT: no \b word boundaries in Hebrew patterns — JS \b only fires
+// at ASCII word/non-word transitions, so \bכ\b never matches in Hebrew
+// text. Patterns are plain substring matches; false-positive risk is
+// minimal because these strings are very specific to CC settlement rows.
 const CC_SETTLEMENT_PATTERNS: RegExp[] = [
-  /\bכ\.?א\.?ל\b/i,         // Cal (כ.א.ל)
-  /\bכאל\b/i,                // Cal alt spelling
-  /\bויזה\s*(חיוב|ק\.?ש\.?ר|כ\.?א\.?ל)/i, // Visa charges / settlements
-  /\bדיינרס\b/i,             // Diners
-  /\bדינרס\b/i,              // Diners alt
-  /\bמסטרקרד\b/i,            // MasterCard
-  /\bמאסטרקרד\b/i,           // MasterCard alt
-  /\bמאסטר.?כרט\b/i,         // MasterCard variant
-  /\bישראכרט\b/i,            // Isracard
-  /\bמקס\s*איט\b/i,          // Max (מקס איט)
-  /\bלאומי\s*קארד\b/i,       // Leumi-Card (legacy)
-  /\bAMEX\b/i,               // American Express
+  /כ\.?א\.?ל/i,           // Cal — matches "כ.א.ל חיוב", "מכאל 2067"
+  /כאל/i,                  // Cal alt spelling
+  /ויזה.*חיוב/i,           // "ויזה חיוב"
+  /ויזה.*ק\.?ש\.?ר/i,      // "ויזה ק.ש.ר"
+  /דיינרס/i,               // Diners
+  /דינרס/i,                // Diners alt
+  /מסטרקרד/i,              // MasterCard
+  /מאסטרקרד/i,             // MasterCard alt
+  /מאסטר.?כרט/i,           // MasterCard variant
+  /ישראכרט/i,              // Isracard
+  /מקס\s*איט/i,            // Max ("מקס איט פי חיוב" — full phrase)
+  /ממקס/i,                 // "חיוב לכרטיס ממקס 7627"
+  /לאומי\s*קארד/i,         // Leumi-Card (legacy)
+  /AMEX/i,                 // American Express
 ];
 
 function looksLikeCcSettlement(merchantRaw: string): boolean {
