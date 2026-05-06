@@ -323,6 +323,9 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
           {result.merchantKeywordCategorized > 0 && (
             <Stat icon={<Search className="size-3.5 text-accent" />} label="קטגוריה (שם בית עסק)" value={result.merchantKeywordCategorized} />
           )}
+          {result.aiCategorized > 0 && (
+            <Stat icon={<Sparkles className="size-3.5 text-purple-600" />} label={`קטגוריה (AI · ${result.aiRulesCreated} כללים נוצרו)`} value={result.aiCategorized} />
+          )}
           {result.recurringPatternsCreated > 0 && (
             <Stat icon={<Repeat className="size-3.5 text-primary" />} label="הוצאות קבועות נוצרו" value={result.recurringPatternsCreated} />
           )}

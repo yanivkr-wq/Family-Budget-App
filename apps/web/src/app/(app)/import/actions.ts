@@ -1139,6 +1139,15 @@ export interface BankExportImportResult {
    *  pattern (so they'll show the קבוע badge). Lets the user see at-a-
    *  glance how much of the new import is recurring vs one-offs. */
   matchedExistingRecurring: number;
+  /** AI-categorized count: rows that were still uncategorized after
+   *  rules + bank-hint + keyword + tagged-export passes, then got
+   *  classified by Claude Haiku in a single batch call. New
+   *  contains-rules are auto-created (≥0.6 confidence) so future
+   *  imports of these merchants land categorized without another LLM
+   *  call. 0 if no uncategorized rows OR if the AI call failed. */
+  aiCategorized: number;
+  /** Number of contains-rules auto-created by the AI pass. */
+  aiRulesCreated: number;
   /** Installment plans auto-created during this import (didn't exist before). */
   newPlansCreated:   number;
   /** Rows linked to an installment plan (newly created OR pre-existing). */
@@ -1156,7 +1165,7 @@ import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { sql } from 'drizzle-orm';
 import { smartImport } from '@/lib/smart-importer';
-import { applyRules } from '@fba/categorizer';
+import { applyRules, CategorizerBatchClient } from '@fba/categorizer';
 import { addMonths } from '@fba/db';
 
 function hashRowId(date: string, chargeDate: string | null, amount: number, merchant: string, notes: string | null): string {
@@ -1222,23 +1231,31 @@ function looksLikeCcSettlement(merchantRaw: string): boolean {
  */
 const BANK_HINT_TO_OUR_CATEGORY: Array<{ pattern: RegExp; targets: string[] }> = [
   // Restaurants & cafes  → "מסעדות וקפה"
-  // Discount-Key uses "מסעדות, קפה וברים", Diners/Visa uses just "מסעדות"
-  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות|מזנון|פיצריות?|המבורגר|קפה\s*וברים|קפה/i,
+  // Discount-Key uses "מסעדות, קפה וברים", Diners/Visa uses just "מסעדות".
+  // International food delivery brands: WOLT, GLOVO, UBEREATS, DOORDASH.
+  // Israeli chains: ארומה, ארקפה, מורן, באג, נספרסו, פיצה דומינו.
+  { pattern: /מסעדות|אוכל\s*בחוץ|בית\s*קפה|פאסט\s*פוד|אוכל\s*ומשקאות|מזנון|פיצריות?|המבורגר|קפה\s*וברים|קפה|wolt|glovo|ubereats|doordash|deliveroo|ארומה|ארקפה|מורן.*אספרסו|באג\s|נספרסו|פיצה|בורגר|burger|starbucks|קפיטריה|דליבר/i,
     targets: ['מסעדות וקפה', 'מסעדות', 'אוכל בחוץ', 'אוכל'] },
   // Groceries  → "מכולת ומזון"
-  // Discount-Key uses "מזון וצריכה", Visa uses "מזון ומשקאות"
-  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן|בשר|קצב|צריכה|משקאות/i,
+  // Discount-Key uses "מזון וצריכה", Visa uses "מזון ומשקאות".
+  // Israeli chains: שופרסל, רמי לוי, ויקטורי, יוחננוף, אושר עד, ביכורי שדה.
+  { pattern: /סופרמרקט|סופר|מצרכים|מזון|מכולת|ירקן|בשר|קצב|צריכה|משקאות|שופרסל|רמי\s*לוי|ויקטורי|יוחננוף|אושר\s*עד|ביכורי\s*שדה|טיב\s*טעם|מגה|חצי\s*חינם|ירוקת/i,
     targets: ['מכולת ומזון', 'מכולת', 'סופר', 'מזון', 'קניות מזון', 'סופרמרקט', 'מצרכים'] },
-  // Fuel — Discount/Visa label these as "אנרגיה" (!), Diners as "רכב ותחבורה"
-  { pattern: /דלק|תדלוק|בנזין|אנרגיה/i,
+  // Fuel — Discount/Visa label these as "אנרגיה" (!), Diners as "רכב ותחבורה".
+  // Brands: פז, סונול, דלק, מנטה, דור אלון, ten.
+  { pattern: /דלק|תדלוק|בנזין|אנרגיה|פז\s*אפליק|פז\s*יילו|סונול|דור\s*אלון|מנטה|\bten\b|tnuva|תנובה/i,
     targets: ['תחבורה', 'דלק', 'רכב'] },
   // Vehicle / transport  → "תחבורה"
-  // Discount-Key: "תחבורה ורכבים", Diners: "רכב ותחבורה"
-  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6|פנגו|טסט|תחבורה|רכבת|אוטובוס|רב\s*קו|מונית|גט/i,
+  // Discount-Key: "תחבורה ורכבים", Diners: "רכב ותחבורה".
+  // Ride-hail: GETT, UBER, MOOVIT, BUBBLE. Parking: PANGO. Trains: רכבת.
+  { pattern: /רכב|מוסך|חנייה|חניון|חניה|כביש\s*אגרה|אגרת\s*כביש|כביש\s*6|פנגו|pango|טסט|תחבורה|רכבת|אוטובוס|רב\s*קו|מונית|gett|\bgt\b|uber|ubr\b|moovit|bubble|cellopark|אגרה|טסטים|דמי\s*רישוי|לוחית\s*זיהוי/i,
     targets: ['תחבורה', 'רכב', 'הוצאות רכב'] },
-  // Communications & tech  → "תקשורת"
-  // Discount-Key: "שירותי תקשורת", Diners/Visa: "תקשורת ומחשבים"
-  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה|פלאפון|פרטנר|הוט|בזק|סלקום|yes|מחשבים/i,
+  // Communications & tech / digital subscriptions  → "תקשורת"
+  // Israeli telco: סלקום, פרטנר, פלאפון, הוט, בזק, יס, גולן.
+  // International digital: OPENAI, CLAUDE.AI, GITHUB, GOOGLE, MICROSOFT,
+  //                        APPLE, AMAZON AWS, ADOBE, NOTION, FIGMA, ZOOM,
+  //                        DROPBOX, PADDLE (subscription billing platform).
+  { pattern: /תקשורת|סלולר|אינטרנט|טלפון|כבלים|טלוויזיה|פלאפון|פרטנר|הוט|בזק|סלקום|\byes\b|מחשבים|openai|chatgpt|claude\.?ai|anthropic|github|google\b|microsoft|apple\.com|aws\b|amazon\s*web|adobe|notion|figma|zoom\.us|dropbox|paddle\b|paddle\.net|stripe|spotify|telekom/i,
     targets: ['תקשורת', 'תקשורת וטלוויזיה'] },
   // Insurance / finance  → "הלוואות וחיסכון"
   // Discount-Key: "ביטוח", Diners/Visa: "ביטוח ופיננסים"
@@ -1256,17 +1273,23 @@ const BANK_HINT_TO_OUR_CATEGORY: Array<{ pattern: RegExp; targets: string[] }> =
   { pattern: /בידור|פנאי|תרבות|קולנוע|תיאטרון|הופעה|מנוי|סטרימינג|נטפליקס|ספוטיפיי|spotify|netflix|youtube|disney|חדר\s*בריחה|spa|ספורט|בילוי/i,
     targets: ['בילוי ופנאי', 'בילוי', 'בידור', 'פנאי', 'בילויים'] },
   // Travel / vacation  → "נסיעות וחופשות"
-  // Diners: "תיירות"
-  { pattern: /חופשה|נסיעות|תיירות|טיסות|מלון|חו["'״]?ל|airbnb|booking|expedia|airline/i,
+  // Diners: "תיירות". Brands: אל על, ארקיע, יונייטד, EL AL, ELAL,
+  // RYANAIR, AIRBNB, BOOKING, EXPEDIA, KAYAK.
+  { pattern: /חופשה|נסיעות|תיירות|טיסות|מלון|חו["'״]?ל|airbnb|booking|expedia|airline|אל[\s־-]?על|el[\s־-]?al|elal|ארקיע|ryanair|kayak|hotels?\.com|trivago/i,
     targets: ['נסיעות וחופשות', 'טיולים', 'חופשות', 'נסיעות', 'נופש'] },
-  // Home / furniture / household  → "בית ומשק"
-  // Discount-Key: "עיצוב הבית", Diners/Visa: "ריהוט ובית"
-  { pattern: /ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים|איקאה|ace|הום\s*סנטר|עיצוב\s*הבית|בית/i,
+  // Home / furniture / household / electrical  → "בית ומשק"
+  // Discount-Key: "עיצוב הבית", Diners/Visa: "ריהוט ובית". Brands:
+  // איקאה, IKEA, ACE, הום סנטר, מחסני תאורה, ויהי אור.
+  { pattern: /ריהוט|מטבח|כלי\s*בית|חומרה|שיפוצים|איקאה|ikea|\bace\b|הום\s*סנטר|עיצוב\s*הבית|בית|מחסני\s*תאורה|תאורה|ויהי\s*אור|אדיסון|חשמלאי|אינסטלטור|מנעולן/i,
     targets: ['בית ומשק', 'בית', 'דיור', 'ריהוט'] },
   // Government / municipal bills  → "בית ומשק"
-  // Discount-Key: "עירייה וממשלה" (catches arnona, water, etc.)
-  { pattern: /עירייה|ממשלה|חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר|חברת\s*חשמל|חשבונית/i,
+  // Discount-Key: "עירייה וממשלה" (catches arnona, water, etc.).
+  // Includes utility companies: חברת חשמל, מי אביבים, פלגי מים, הגיחון.
+  { pattern: /עירייה|ממשלה|חשמל|מים|גז|תאגיד|ארנונה|ועד\s*בית|דייר|חברת\s*חשמל|חשבונית|פלגי\s*מים|מי\s*אביבים|הגיחון|מועצה\s*אזורית/i,
     targets: ['בית ומשק', 'חשבונות', 'שירותים', 'בית'] },
+  // CC / banking fees  → "בית ומשק" (closest catch-all when no fees cat)
+  { pattern: /דמי\s*כרטיס|דמי\s*ניהול|עמלת|עמלה|ריבית|מסלול\s*בסיסי|מסלול\s*נוסף|פירעון\s*תפעולית|פירעון/i,
+    targets: ['בית ומשק', 'הלוואות וחיסכון', 'אחר'] },
   // Education  → "ילדים וחינוך"
   { pattern: /חינוך|לימודים|בית\s*ספר|גן\s*ילדים|חוגים|ספרים|אוניברס|מכללה|פעוטון|קייטנה|תינוק|צעצועים/i,
     targets: ['ילדים וחינוך', 'חינוך', 'לימודים', 'ילדים'] },
@@ -1340,6 +1363,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     transferPairsLinked: 0, categoriesCreated: 0, ccSettlementsFlagged: 0,
     autoRoutedAccount: false, destinationAccountName: null,
     matchedExistingRecurring: 0,
+    aiCategorized: 0, aiRulesCreated: 0,
     newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
@@ -1957,6 +1981,120 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       recurringSet.has(i.merchantNormalized as string),
     ).length;
 
+    // ── Pass 7: AUTO-AI categorization for any rows still uncategorized
+    // after rules + bank-hint + merchant-keyword + tagged-export. Sends
+    // distinct uncategorized merchants from THIS import to Claude Haiku
+    // in a single batch call. For each high-confidence (≥0.6) result,
+    // creates a contains-rule (so future imports of the same merchant
+    // land categorized without another LLM call) and updates the
+    // matching transactions' categoryId/source = 'llm'.
+    //
+    // Best-effort — failures are silently swallowed so a transient
+    // Anthropic outage doesn't block an otherwise-successful import.
+    let aiCategorized = 0;
+    let aiRulesCreated = 0;
+    try {
+      // Find merchants from THIS batch that are still uncategorized.
+      // Excludes is_transfer rows (CC settlements, cross-account hops) —
+      // those don't need a category since they're zeroed in cash flow.
+      const externalIdsThisBatch = inserts.map((i) => i.externalId).filter(Boolean) as string[];
+      if (externalIdsThisBatch.length > 0) {
+        const uncategorizedRows = await db
+          .select({
+            merchantNormalized: schema.transactions.merchantNormalized,
+            amountIls: schema.transactions.amountIls,
+          })
+          .from(schema.transactions)
+          .where(and(
+            eq(schema.transactions.householdId, ctx.householdId),
+            eq(schema.transactions.accountId, accountId),
+            inArray(schema.transactions.externalId, externalIdsThisBatch),
+            isNull(schema.transactions.categoryId),
+            eq(schema.transactions.isTransfer, false),
+          ));
+
+        // Group by merchant — one classification per unique merchant.
+        const byMerchant = new Map<string, number>();
+        for (const r of uncategorizedRows) {
+          const m = r.merchantNormalized;
+          if (!byMerchant.has(m)) byMerchant.set(m, Number(r.amountIls));
+        }
+
+        if (byMerchant.size > 0) {
+          // Reuse the household's category list for the LLM prompt.
+          const cats = await db
+            .select({
+              id: schema.categories.id,
+              nameHe: schema.categories.nameHe,
+              nameEn: schema.categories.nameEn,
+              isIncome: schema.categories.isIncome,
+            })
+            .from(schema.categories)
+            .where(and(
+              eq(schema.categories.householdId, ctx.householdId),
+              isNull(schema.categories.parentId),
+            ));
+          const categoriesForLlm = cats.map((c) => ({
+            id: c.id, nameHe: c.nameHe, nameEn: c.nameEn ?? null, isIncome: c.isIncome,
+          }));
+          const validCategoryIds = new Set(cats.map((c) => c.id));
+
+          const merchantList = [...byMerchant.entries()].slice(0, 80).map(([m, amt]) => ({
+            merchantNormalized: m,
+            sampleAmounts: [amt],
+          }));
+
+          const client = new CategorizerBatchClient();
+          const llmResp = await client.categorizeMany(merchantList, categoriesForLlm);
+          const CONFIDENCE_THRESHOLD = 0.6;
+
+          for (let i = 0; i < merchantList.length; i++) {
+            const ent = merchantList[i]!;
+            const llm = llmResp.results[i];
+            if (!llm || !llm.categoryId || !validCategoryIds.has(llm.categoryId)) continue;
+            if (llm.confidence < CONFIDENCE_THRESHOLD) continue;
+
+            // Auto-create a contains-rule so future imports of this
+            // merchant land categorized without an AI call.
+            const ruleResult = await db.insert(schema.categoryRules).values({
+              householdId: ctx.householdId,
+              name: `AI: ${ent.merchantNormalized}`,
+              description: `Auto-created during import — ${llm.reasoning.slice(0, 200)}`,
+              priority: 500,
+              matchType: 'contains',
+              pattern: ent.merchantNormalized,
+              categoryId: llm.categoryId,
+              ...(llm.subCategoryId ? { subCategoryId: llm.subCategoryId } : {}),
+              isActive: true,
+              source: 'llm_confirmed',
+            }).onConflictDoNothing().returning({ id: schema.categoryRules.id });
+            if (ruleResult.length > 0) aiRulesCreated++;
+
+            // Backfill matching transactions in this account.
+            const updated = await db
+              .update(schema.transactions)
+              .set({
+                categoryId: llm.categoryId,
+                subCategoryId: llm.subCategoryId ?? null,
+                categorySource: 'llm',
+                ...(ruleResult[0]?.id ? { appliedRuleId: ruleResult[0].id } : {}),
+              })
+              .where(and(
+                eq(schema.transactions.householdId, ctx.householdId),
+                eq(schema.transactions.accountId, accountId),
+                eq(schema.transactions.merchantNormalized, ent.merchantNormalized),
+                isNull(schema.transactions.categoryId),
+              ))
+              .returning({ id: schema.transactions.id });
+            aiCategorized += updated.length;
+          }
+        }
+      }
+    } catch (err) {
+      // Don't fail the import on AI errors — log for diagnostics.
+      console.error('[import] auto-AI categorization failed:', err);
+    }
+
     await db.insert(schema.auditLog).values({
       householdId: ctx.householdId,
       actorUserId: ctx.userId,
@@ -1980,6 +2118,8 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         categoriesCreated,
         ccSettlementsFlagged,
         matchedExistingRecurring,
+        aiCategorized,
+        aiRulesCreated,
         newPlansCreated,
         rowsLinkedToPlans,
         forexRows: parsed.transactions.filter((t) => t.isForex).length,
@@ -2013,6 +2153,8 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       categoriesCreated,
       ccSettlementsFlagged,
       matchedExistingRecurring,
+      aiCategorized,
+      aiRulesCreated,
       autoRoutedAccount: autoRouted,
       destinationAccountName: account.name,
       newPlansCreated,
