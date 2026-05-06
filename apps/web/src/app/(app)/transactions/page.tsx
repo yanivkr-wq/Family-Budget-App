@@ -112,6 +112,10 @@ export default async function TransactionsPage(props: {
       categorySource: schema.transactions.categorySource,
       ruleName: schema.categoryRules.name,
       rulePattern: schema.categoryRules.pattern,
+      // Distinguishes user-created rules ('user') from AI-created
+      // rules ('llm_confirmed') so the UI can show different badges:
+      // blue "כלל" for user intent vs purple "AI" for auto-created.
+      ruleSource: schema.categoryRules.source,
       // Installment-plan link (null for one-off transactions). When non-null,
       // we surface a "תשלום N/Y · עד MM/YY" pill on the row.
       installmentPlanId:           schema.transactions.installmentPlanId,
@@ -497,6 +501,7 @@ export default async function TransactionsPage(props: {
           appliedRuleId: t.appliedRuleId,
           categorySource: t.categorySource,
           ruleName: t.ruleName ?? t.rulePattern ?? null,
+          ruleSource: t.ruleSource ?? null,
           isManual: t.isManual,
           installmentPlanId:           t.installmentPlanId,
           installmentCurrentPaymentNo: t.installmentCurrentPaymentNo,

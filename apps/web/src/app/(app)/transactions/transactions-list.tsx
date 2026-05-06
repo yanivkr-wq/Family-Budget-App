@@ -35,6 +35,9 @@ interface Transaction {
   appliedRuleId?: string | null;
   categorySource?: string | null;
   ruleName?: string | null;
+  /** 'user' = manually created, 'llm_confirmed' = AI-created at import,
+   *  'pending' = AI suggestion not yet confirmed. Drives the badge color. */
+  ruleSource?: string | null;
   isManual?: boolean;
   // Installment-plan link. When installmentPlanId is non-null, this row is
   // one monthly payment of a multi-payment plan — render with a primary
@@ -360,11 +363,21 @@ export function TransactionsList(props: {
                   const chargeDateDiffersFromGroup =
                     !isImmediateRow && !!t.chargeDate && t.chargeDate !== groupChargeDate;
 
-                  const isAutoRule        = t.categorySource === 'rule';
+                  // Source-of-categorization derivation:
+                  //   • isAutoRule       — a USER-created rule fired (blue "כלל" badge)
+                  //   • isLlm            — AI involvement, either via direct
+                  //                        Pass-7 categorization (categorySource='llm')
+                  //                        OR via an AI-created rule firing on a
+                  //                        later import (rule.source='llm_confirmed').
+                  //                        Both show purple "AI" badge.
+                  // This way the user sees blue ONLY for rules they wrote
+                  // themselves, and purple for everything AI touched.
+                  const isAutoRule        = t.categorySource === 'rule' && t.ruleSource === 'user';
                   const isBankHint        = t.categorySource === 'bank_hint';
                   const isMerchantKeyword = t.categorySource === 'merchant_keyword';
                   const isTaggedExport    = t.categorySource === 'tagged_export';
-                  const isLlm             = t.categorySource === 'llm';
+                  const isLlm             = t.categorySource === 'llm'
+                                          || (t.categorySource === 'rule' && t.ruleSource === 'llm_confirmed');
                   const txIsManual        = t.isManual !== false;
                   const isInstallment     = !!t.installmentPlanId;
 

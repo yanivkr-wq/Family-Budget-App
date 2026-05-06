@@ -374,8 +374,26 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
         );
       }
       if (isLlm) {
+        // If an AI-created rule fired (or AI categorized directly + saved
+        // a rule), link the badge to /admin/rules so the user can review
+        // and convert it to a "real" user rule, broaden it, or delete it.
+        const tooltip = t.ruleName
+          ? `תוייג על ידי AI · כלל אוטומטי: ${t.ruleName} (לחץ לעריכה)`
+          : 'תוייג על ידי AI במהלך הייבוא — נוצר כלל אוטומטי לעתיד';
+        if (t.appliedRuleId) {
+          return (
+            <Link
+              href={`/admin/rules?edit=${t.appliedRuleId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-300"
+              title={tooltip}
+            >
+              <Sparkles className="size-2.5" />AI
+            </Link>
+          );
+        }
         return (
-          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="תוייג על ידי AI במהלך הייבוא — נוצר כלל אוטומטי לעתיד">
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title={tooltip}>
             <Sparkles className="size-2.5" />AI
           </span>
         );
