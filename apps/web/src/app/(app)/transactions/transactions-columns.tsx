@@ -37,7 +37,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock, Globe2, ArrowLeftRight } from 'lucide-react';
+import { CreditCard, GripVertical, Repeat, Sparkles, Upload, User, X, Zap, Clock, Globe2, ArrowLeftRight, Landmark, Search, UserCheck } from 'lucide-react';
 import { formatIls, formatDateHe } from '@fba/shared';
 import { cn } from '@/lib/utils';
 
@@ -90,6 +90,9 @@ export interface CellContext {
   acc: Account | null;
   isInstallment: boolean;
   isAutoRule: boolean;
+  isBankHint: boolean;
+  isMerchantKeyword: boolean;
+  isTaggedExport: boolean;
   isLlm: boolean;
   txIsManual: boolean;
   chargeDateDiffersFromGroup: boolean;
@@ -254,14 +257,30 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
-    renderCell: ({ t, cat, subCat, isAutoRule, isLlm }) =>
+    renderCell: ({ t, cat, subCat, isAutoRule, isBankHint, isMerchantKeyword, isTaggedExport, isLlm }) =>
       cat ? (
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-1 flex-wrap">
             <span className="pill text-xs whitespace-nowrap" style={{ backgroundColor: `${cat.color}25`, color: cat.color ?? undefined }}>{cat.nameHe}</span>
+            {/* Source badge — exactly one fires. Order = priority. */}
             {isAutoRule && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" title={`כלל: ${t.ruleName ?? 'ללא שם'}`}>
                 <Zap className="size-2.5" />כלל
+              </span>
+            )}
+            {isTaggedExport && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" title="קטגוריה הגיעה מהקובץ עצמו (תיוג ידני בקובץ המקור)">
+                <UserCheck className="size-2.5" />תיוג ידני
+              </span>
+            )}
+            {isBankHint && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="קטגוריה לפי עמודת ענף של הבנק/חברת האשראי">
+                <Landmark className="size-2.5" />ענף בנק
+              </span>
+            )}
+            {isMerchantKeyword && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-teal-100 px-1.5 py-0.5 text-[10px] font-medium text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="קטגוריה לפי מילת מפתח בשם בית העסק">
+                <Search className="size-2.5" />אוטומטי
               </span>
             )}
             {isLlm && (

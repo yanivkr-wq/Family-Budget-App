@@ -58,8 +58,12 @@ export function InstallmentModal({ plan, accounts, onClose }: Props) {
   const [isPending, startTransition] = useTransition();
 
   // ── Controlled fields ─────────────────────────────────────────────────────
+  // merchant = the bank-extracted name (the join key for transactions);
+  // description = a friendly label the user types (e.g., "iPhone 15 Pro").
+  // Description is OPTIONAL — when blank we display merchant in the table.
   const nowMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const [merchant,    setMerchant]    = useState(plan?.description ?? plan?.merchantNormalized ?? '');
+  const [merchant,    setMerchant]    = useState(plan?.merchantNormalized ?? '');
+  const [description, setDescription] = useState(plan?.description ?? '');
   const [amount,      setAmount]      = useState(plan ? String(Math.abs(Number(plan.paymentAmountIls))) : '');
   const [total,       setTotal]       = useState(plan?.totalPayments ? String(plan.totalPayments) : '');
   const [currentNo,   setCurrentNo]   = useState(plan ? String(plan.currentPaymentNo) : '1');
@@ -90,9 +94,10 @@ export function InstallmentModal({ plan, accounts, onClose }: Props) {
     e.preventDefault();
     setError(null);
     const fd = new FormData(e.currentTarget);
-    // Merchant goes into both fields
     fd.set('merchantNormalized', merchant);
-    fd.set('description',        merchant);
+    // Description is optional — empty string lets the list fall back to
+    // the merchant name automatically (it does `description ?? merchant`).
+    fd.set('description',        description);
 
     startTransition(async () => {
       const result = isEdit
@@ -124,22 +129,37 @@ export function InstallmentModal({ plan, accounts, onClose }: Props) {
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {isEdit && <input type="hidden" name="id" value={plan!.id} />}
           <input type="hidden" name="merchantNormalized" value={merchant} />
-          <input type="hidden" name="description"        value={merchant} />
+          <input type="hidden" name="description"        value={description} />
 
-          {/* Merchant / Description */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">
-              שם העסק / תיאור <span className="text-destructive">*</span>
-            </label>
-            <input
-              name="merchantNormalized"
-              value={merchant}
-              onChange={(e) => setMerchant(e.target.value)}
-              required
-              maxLength={200}
-              placeholder="לדוגמה: אייפון 15, ריהוט..."
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-            />
+          {/* Merchant + description side by side */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                שם בית עסק <span className="text-destructive">*</span>
+              </label>
+              <input
+                value={merchant}
+                onChange={(e) => setMerchant(e.target.value)}
+                required
+                maxLength={200}
+                placeholder='לדוגמה: KSP ראשל"צ'
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+              <p className="text-[10px] text-muted-foreground">המזהה לקישור עתידי של תנועות.</p>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                תיאור / שם התשלום
+              </label>
+              <input
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                maxLength={200}
+                placeholder="לדוגמה: iPhone 15 Pro"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+              <p className="text-[10px] text-muted-foreground">מה נרכש בפועל — מוצג בטבלה.</p>
+            </div>
           </div>
 
           {/* Amount + Total payments (side by side) */}

@@ -1606,21 +1606,18 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       } : taggedCategoryId ? {
         categoryId:     taggedCategoryId,
         ...(taggedSubCategoryId ? { subCategoryId: taggedSubCategoryId } : {}),
-        // 'manual' source — the user already tagged this in their file.
-        categorySource: 'manual' as const,
+        // 'tagged_export' — the file already carried an exact category name.
+        categorySource: 'tagged_export' as const,
       } : bankHintCategoryId ? {
         categoryId:     bankHintCategoryId,
-        // categorySource = 'rule' is reused because the source enum is
-        // ['rule', 'llm', 'manual'] and bank hints are deterministic like
-        // rules. appliedRuleId stays NULL so a user can later distinguish
-        // bank-hint matches from real-rule matches in the UI.
-        categorySource: 'rule' as const,
+        // 'bank_hint' — the bank's own ענף column drove this. Distinct from
+        // 'rule' so the UI badge says "ענף בנק" instead of "כלל".
+        categorySource: 'bank_hint' as const,
       } : merchantKeywordCategoryId ? {
         categoryId:     merchantKeywordCategoryId,
-        // Same rationale as bank-hint: deterministic match against a
-        // hard-coded keyword map → record as 'rule' source with NULL
-        // applied_rule_id so it's distinguishable from real user rules.
-        categorySource: 'rule' as const,
+        // 'merchant_keyword' — keyword scan against the merchant string.
+        // Distinct so the UI badge says "אוטומטי" not "כלל".
+        categorySource: 'merchant_keyword' as const,
       } : {}),
       externalId: hashRowId(tx.transactionDate, tx.chargeDate, tx.amountIls, tx.merchantRaw, tx.notes),
     };

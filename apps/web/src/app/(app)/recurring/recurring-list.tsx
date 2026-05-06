@@ -123,7 +123,20 @@ export function RecurringList({
                       )}
                     </td>
                     <td className={`px-3 py-2 tabular-nums ${isIncome ? 'text-success font-medium' : ''}`}>
-                      {isIncome ? '+' : '−'}{formatIls(Math.abs(amt), { decimals: false })}
+                      {p.amountMode === 'dynamic' ? (
+                        <span className="text-muted-foreground italic">דינמי</span>
+                      ) : p.amountMode === 'range' && p.minAmountIls != null && p.maxAmountIls != null ? (
+                        <div className="flex flex-col leading-tight">
+                          <span>
+                            {isIncome ? '+' : '−'}{formatIls(Math.abs(Number(p.minAmountIls)), { decimals: false })}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">
+                            עד {formatIls(Math.abs(Number(p.maxAmountIls)), { decimals: false })}
+                          </span>
+                        </div>
+                      ) : (
+                        <>{isIncome ? '+' : '−'}{formatIls(Math.abs(amt), { decimals: false })}</>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">
                       {FREQ_LABEL[p.frequency] ?? p.frequency}

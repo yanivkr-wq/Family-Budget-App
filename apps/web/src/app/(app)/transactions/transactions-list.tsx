@@ -298,10 +298,13 @@ export function TransactionsList(props: {
                   const chargeDateDiffersFromGroup =
                     !isImmediateRow && !!t.chargeDate && t.chargeDate !== groupChargeDate;
 
-                  const isAutoRule   = t.categorySource === 'rule';
-                  const isLlm        = t.categorySource === 'llm';
-                  const txIsManual   = t.isManual !== false;
-                  const isInstallment = !!t.installmentPlanId;
+                  const isAutoRule        = t.categorySource === 'rule';
+                  const isBankHint        = t.categorySource === 'bank_hint';
+                  const isMerchantKeyword = t.categorySource === 'merchant_keyword';
+                  const isTaggedExport    = t.categorySource === 'tagged_export';
+                  const isLlm             = t.categorySource === 'llm';
+                  const txIsManual        = t.isManual !== false;
+                  const isInstallment     = !!t.installmentPlanId;
 
                   // Build the cell-render context once per row. Each visible
                   // column's renderCell picks what it needs from this bag.
@@ -312,6 +315,9 @@ export function TransactionsList(props: {
                     acc:    acc    ?? null,
                     isInstallment,
                     isAutoRule,
+                    isBankHint,
+                    isMerchantKeyword,
+                    isTaggedExport,
                     isLlm,
                     txIsManual,
                     chargeDateDiffersFromGroup,

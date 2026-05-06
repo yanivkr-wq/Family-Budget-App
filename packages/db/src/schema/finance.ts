@@ -266,7 +266,17 @@ export const transactions = pgTable(
      *  'llm'    – Claude Haiku suggested it (LLM fallback)
      *  'manual' – user set it explicitly via the UI
      */
-    categorySource: text({ enum: ['rule', 'llm', 'manual'] }),
+    /**
+     * How this transaction got its category. Drives the badge in the UI:
+     *   • 'rule'             — user-defined category_rule (with applied_rule_id)
+     *   • 'bank_hint'        — bank's own ענף column → mapped to household category
+     *   • 'merchant_keyword' — merchant name keyword scan against the same map
+     *   • 'tagged_export'    — file already carried an exact category name (custom Excel)
+     *   • 'llm'              — Claude classified it
+     *   • 'manual'           — user picked the category in the UI
+     * Plain text column — adding new values does NOT require a migration.
+     */
+    categorySource: text({ enum: ['rule', 'llm', 'manual', 'bank_hint', 'merchant_keyword', 'tagged_export'] }),
     rawSource: jsonb(), // raw scraped object for debugging
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
@@ -305,8 +315,25 @@ export const recurringPatterns = pgTable(
      *  "פייבוקס", description = "השכרת דירה אורית מילוא". Optional. */
     description: text(),
     categoryId: uuid().references(() => categories.id, { onDelete: 'set null' }),
+    /**
+     * How to interpret the amount fields:
+     *   'fixed'   — expectedAmountIls is THE expected charge each cycle
+     *               (small drift OK via tolerancePct)
+     *   'range'   — expectedAmountIls = midpoint, min/max define the band
+     *               (use for things that bounce within a known range, like
+     *                a 194-197₪ insurance premium)
+     *   'dynamic' — no fixed amount; whatever the actual charge is wins
+     *               (use for variable bills like electricity / water)
+     */
+    amountMode: text({ enum: ['fixed', 'range', 'dynamic'] })
+      .notNull()
+      .default('fixed'),
     expectedAmountIls: numeric({ precision: 10, scale: 2 }).notNull(),
     medianAmountIls: numeric({ precision: 10, scale: 2 }).notNull(),
+    /** Lower bound for 'range' mode (inclusive). Null otherwise. */
+    minAmountIls: numeric({ precision: 10, scale: 2 }),
+    /** Upper bound for 'range' mode (inclusive). Null otherwise. */
+    maxAmountIls: numeric({ precision: 10, scale: 2 }),
     tolerancePct: integer().notNull().default(10),
     frequency: text({ enum: ['monthly', 'bimonthly', 'quarterly', 'yearly'] })
       .notNull()

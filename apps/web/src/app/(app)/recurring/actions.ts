@@ -19,14 +19,24 @@ interface ParsedForm {
   merchant:    string;
   description: string | null; // human-readable label (e.g., "Spotify Family")
   categoryId:  string | null;
-  amount:      number;       // unsigned magnitude
+  amount:      number;       // unsigned magnitude — required for 'fixed' / 'range', ignored for 'dynamic'
   sign:        'expense' | 'income';
   frequency:   'monthly' | 'bimonthly' | 'quarterly' | 'yearly';
   status:      'active' | 'paused' | 'ended';
   notes:       string | null;
+  amountMode:  'fixed' | 'range' | 'dynamic';
+  minAmount:   number | null; // for 'range' mode only
+  maxAmount:   number | null;
 }
 
 function parseForm(fd: FormData): ParsedForm {
+  const numOrNull = (v: FormDataEntryValue | null): number | null => {
+    if (v === null) return null;
+    const s = String(v).replace(/,/g, '').trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
   return {
     merchant:    String(fd.get('merchant') ?? '').trim(),
     description: ((fd.get('description') as string | null) ?? '').trim() || null,
@@ -36,6 +46,9 @@ function parseForm(fd: FormData): ParsedForm {
     frequency:   (fd.get('frequency') as ParsedForm['frequency']) ?? 'monthly',
     status:      (fd.get('status') as ParsedForm['status']) ?? 'active',
     notes:       ((fd.get('notes') as string | null) ?? '').trim() || null,
+    amountMode:  (fd.get('amountMode') as ParsedForm['amountMode']) ?? 'fixed',
+    minAmount:   numOrNull(fd.get('minAmount')),
+    maxAmount:   numOrNull(fd.get('maxAmount')),
   };
 }
 
@@ -59,10 +72,30 @@ export async function createRecurringPattern(fd: FormData): Promise<{ ok: boolea
     const { householdId, db } = await requireHousehold();
     const f = parseForm(fd);
 
-    if (!f.merchant)              return { ok: false, error: 'שם בית העסק הוא שדה חובה' };
-    if (!Number.isFinite(f.amount) || f.amount <= 0) return { ok: false, error: 'סכום צפוי חייב להיות חיובי' };
+    if (!f.merchant) return { ok: false, error: 'שם בית העסק הוא שדה חובה' };
+    // Amount validation depends on mode:
+    //   • fixed  → amount required, > 0
+    //   • range  → min + max required, min ≤ max
+    //   • dynamic → no amount validation (we store 0 as placeholder)
+    if (f.amountMode === 'fixed' && (!Number.isFinite(f.amount) || f.amount <= 0)) {
+      return { ok: false, error: 'סכום צפוי חייב להיות חיובי' };
+    }
+    if (f.amountMode === 'range') {
+      if (f.minAmount === null || f.maxAmount === null) {
+        return { ok: false, error: 'יש להזין מינימום ומקסימום למצב טווח' };
+      }
+      if (f.minAmount > f.maxAmount) {
+        return { ok: false, error: 'מינימום חייב להיות ≤ מקסימום' };
+      }
+    }
 
-    const signed = f.sign === 'income' ? Math.abs(f.amount) : -Math.abs(f.amount);
+    // For 'fixed' use the amount; for 'range' use the midpoint as the
+    // representative amount; for 'dynamic' use 0 as a placeholder.
+    const representative =
+      f.amountMode === 'fixed'   ? f.amount
+      : f.amountMode === 'range' ? ((f.minAmount! + f.maxAmount!) / 2)
+      :                            0;
+    const signed = f.sign === 'income' ? Math.abs(representative) : -Math.abs(representative);
     const month  = currentMonth();
 
     await db.insert(schema.recurringPatterns).values({
@@ -70,8 +103,15 @@ export async function createRecurringPattern(fd: FormData): Promise<{ ok: boolea
       merchantNormalized: f.merchant,
       ...(f.description ? { description: f.description } : {}),
       ...(f.categoryId ? { categoryId: f.categoryId } : {}),
+      amountMode:         f.amountMode,
       expectedAmountIls:  String(signed),
       medianAmountIls:    String(signed),
+      ...(f.amountMode === 'range' && f.minAmount !== null
+        ? { minAmountIls: String(f.sign === 'income' ? f.minAmount : -f.minAmount) }
+        : {}),
+      ...(f.amountMode === 'range' && f.maxAmount !== null
+        ? { maxAmountIls: String(f.sign === 'income' ? f.maxAmount : -f.maxAmount) }
+        : {}),
       tolerancePct:       10,
       frequency:          f.frequency,
       occurrenceCount:    0,
@@ -104,10 +144,24 @@ export async function updateRecurringPattern(fd: FormData): Promise<{ ok: boolea
     if (!id) return { ok: false, error: 'מזהה תבנית חסר' };
 
     const f = parseForm(fd);
-    if (!f.merchant)              return { ok: false, error: 'שם בית העסק הוא שדה חובה' };
-    if (!Number.isFinite(f.amount) || f.amount <= 0) return { ok: false, error: 'סכום צפוי חייב להיות חיובי' };
+    if (!f.merchant) return { ok: false, error: 'שם בית העסק הוא שדה חובה' };
+    if (f.amountMode === 'fixed' && (!Number.isFinite(f.amount) || f.amount <= 0)) {
+      return { ok: false, error: 'סכום צפוי חייב להיות חיובי' };
+    }
+    if (f.amountMode === 'range') {
+      if (f.minAmount === null || f.maxAmount === null) {
+        return { ok: false, error: 'יש להזין מינימום ומקסימום למצב טווח' };
+      }
+      if (f.minAmount > f.maxAmount) {
+        return { ok: false, error: 'מינימום חייב להיות ≤ מקסימום' };
+      }
+    }
 
-    const signed = f.sign === 'income' ? Math.abs(f.amount) : -Math.abs(f.amount);
+    const representative =
+      f.amountMode === 'fixed'   ? f.amount
+      : f.amountMode === 'range' ? ((f.minAmount! + f.maxAmount!) / 2)
+      :                            0;
+    const signed = f.sign === 'income' ? Math.abs(representative) : -Math.abs(representative);
 
     await db
       .update(schema.recurringPatterns)
@@ -115,8 +169,19 @@ export async function updateRecurringPattern(fd: FormData): Promise<{ ok: boolea
         merchantNormalized: f.merchant,
         description:        f.description,
         categoryId:         f.categoryId,
+        amountMode:         f.amountMode,
         expectedAmountIls:  String(signed),
         medianAmountIls:    String(signed),
+        // Always set min/max — null when not in range mode so switching
+        // away from range clears stale bounds.
+        minAmountIls:
+          f.amountMode === 'range' && f.minAmount !== null
+            ? String(f.sign === 'income' ? f.minAmount : -f.minAmount)
+            : null,
+        maxAmountIls:
+          f.amountMode === 'range' && f.maxAmount !== null
+            ? String(f.sign === 'income' ? f.maxAmount : -f.maxAmount)
+            : null,
         frequency:          f.frequency,
         status:             f.status,
         notes:              f.notes,
