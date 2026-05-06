@@ -127,6 +127,21 @@ for (const file of files) {
   const allHaveAmounts = a.transactions.every((t) => Number.isFinite(t.amountIls) && t.amountIls !== 0);
   check('every txn has a finite non-zero amount', allHaveAmounts);
 
+  // ── REGRESSION: forex rows must have charge_date = transaction_date ───
+  // Forex on CCs settles immediately — bank-stated charge_date (e.g.,
+  // the 10th) is wrong. The parser overrides it. If this check ever
+  // fails, a future change reintroduced the bug where forex rows fell
+  // into the monthly batch instead of the immediate group.
+  const forexRows = a.transactions.filter((t) => t.originalCurrency && t.originalCurrency !== 'ILS');
+  if (forexRows.length > 0) {
+    const allImmediate = forexRows.every((t) => t.chargeDate === t.transactionDate);
+    check(
+      `forex rows have chargeDate = transactionDate (immediate)`,
+      allImmediate,
+      `${forexRows.length} forex rows in this file`,
+    );
+  }
+
   console.log();
 }
 

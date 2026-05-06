@@ -320,11 +320,20 @@ export function TransactionsList(props: {
               {(() => {
                 const monthStart = `${props.billingMonth}-01`;
 
-                // ── Split: immediate (bank) vs credit-card ────────────────
-                // Bank transactions are charged the moment they happen — they
-                // don't belong in a billing-cycle group. Separate them first.
-                const isImmediateTx = (t: Transaction) =>
-                  accMap.get(t.accountId)?.type === 'bank';
+                // ── Split: immediate vs credit-card billing cycle ─────────
+                // A row counts as IMMEDIATE when:
+                //   • the account is a bank (every txn is debited the day
+                //     it happens), OR
+                //   • the row is a forex purchase on a CC (Israeli CC
+                //     issuers settle non-NIS charges to the linked bank
+                //     account immediately, NOT in the monthly cycle).
+                // Both cases get grouped into the "חיובים מיידיים" header
+                // so the user sees them on the day money actually moves.
+                const isImmediateTx = (t: Transaction) => {
+                  if (accMap.get(t.accountId)?.type === 'bank') return true;
+                  if (!!t.originalCurrency && t.originalCurrency !== 'ILS') return true;
+                  return false;
+                };
 
                 const immediateTxns = visible.filter(isImmediateTx);
                 const ccTxns        = visible.filter((t) => !isImmediateTx(t));
@@ -561,12 +570,17 @@ export function TransactionsList(props: {
 
                 return (
                   <>
-                    {/* ══ GROUP 0: Immediate — bank direct, charged on the day ══ */}
+                    {/* ══ GROUP 0: Immediate — bank direct + forex CC charges ══
+                         Bank rows always belong here. Forex CC charges
+                         (originalCurrency != ILS) also belong because
+                         Israeli CC issuers settle them immediately to
+                         the linked bank account, NOT in the monthly
+                         cycle. */}
                     {immediateTxns.length > 0 && (
                       <>
                         <SectionHeader
                           icon={<Zap className="size-3.5 shrink-0" />}
-                          label="חיובים מיידיים — בנק / הוראות קבע"
+                          label="חיובים מיידיים — בנק / מט״ח / הוראות קבע"
                           count={immediateTxns.length}
                           expenses={sumExpenses(immediateTxns)}
                           income={sumIncome(immediateTxns)}
