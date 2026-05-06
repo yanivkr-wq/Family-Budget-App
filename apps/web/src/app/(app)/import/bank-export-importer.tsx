@@ -193,6 +193,9 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
           {result.transferPairsLinked > 0 && (
             <Stat icon={<Link2 className="size-3.5 text-success" />} label="זוגות העברה זוּוגו" value={result.transferPairsLinked} />
           )}
+          {result.ccSettlementsFlagged > 0 && (
+            <Stat icon={<CreditCard className="size-3.5 text-amber-600" />} label="חיובי כרטיס דוּלגו" value={result.ccSettlementsFlagged} />
+          )}
           {result.newPlansCreated > 0 && (
             <Stat icon={<CreditCard className="size-3.5 text-accent" />} label="תוכניות תשלומים נוצרו" value={result.newPlansCreated} />
           )}

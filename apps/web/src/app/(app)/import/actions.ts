@@ -1124,6 +1124,11 @@ export interface BankExportImportResult {
   transferPairsLinked: number;
   /** Categories (parent or sub) auto-created from tagged-export hints. */
   categoriesCreated: number;
+  /** Bank-statement rows where the merchant looks like a CC settlement
+   *  ("כ.א.ל חיוב", "דיינרס חיוב", etc.). Marked is_transfer = true so
+   *  they're excluded from cash-flow totals — the granular detail comes
+   *  from the matching CC excel file. Prevents double-counting. */
+  ccSettlementsFlagged: number;
   /** Imported transactions whose merchant matched an existing recurring
    *  pattern (so they'll show the קבוע badge). Lets the user see at-a-
    *  glance how much of the new import is recurring vs one-offs. */
@@ -1151,6 +1156,42 @@ import { addMonths } from '@fba/db';
 function hashRowId(date: string, chargeDate: string | null, amount: number, merchant: string, notes: string | null): string {
   const key = [date, chargeDate ?? '', amount.toFixed(2), merchant.trim(), (notes ?? '').trim()].join('|');
   return createHash('sha1').update(key).digest('hex').slice(0, 24);
+}
+
+/**
+ * Patterns that match credit-card SETTLEMENT rows on a bank-account file.
+ * The user's CCs are linked to bank accounts: when a CC charges them
+ * (monthly batch on the 10th OR an immediate forex charge), the bank
+ * statement shows a row like "כ.א.ל חיוב" / "ויזה ק.ש.ר" / "דיינרס חיוב"
+ * — but the GRANULAR detail of those charges is in the CC file's import.
+ *
+ * Importing both as expenses double-counts. So when we see a settlement
+ * row in a BANK file, we set is_transfer = true → it's excluded from
+ * cash-flow totals, the CC file rows are the source of truth.
+ *
+ * Patterns are intentionally broad — false positives are cheap (the user
+ * sees "↔ העברה" on the row and can fix), false negatives cause double
+ * counting which is harder to spot.
+ */
+const CC_SETTLEMENT_PATTERNS: RegExp[] = [
+  /\bכ\.?א\.?ל\b/i,         // Cal (כ.א.ל)
+  /\bכאל\b/i,                // Cal alt spelling
+  /\bויזה\s*(חיוב|ק\.?ש\.?ר|כ\.?א\.?ל)/i, // Visa charges / settlements
+  /\bדיינרס\b/i,             // Diners
+  /\bדינרס\b/i,              // Diners alt
+  /\bמסטרקרד\b/i,            // MasterCard
+  /\bמאסטרקרד\b/i,           // MasterCard alt
+  /\bמאסטר.?כרט\b/i,         // MasterCard variant
+  /\bישראכרט\b/i,            // Isracard
+  /\bמקס\s*איט\b/i,          // Max (מקס איט)
+  /\bלאומי\s*קארד\b/i,       // Leumi-Card (legacy)
+  /\bAMEX\b/i,               // American Express
+];
+
+function looksLikeCcSettlement(merchantRaw: string): boolean {
+  const s = merchantRaw.trim();
+  if (!s) return false;
+  return CC_SETTLEMENT_PATTERNS.some((re) => re.test(s));
 }
 
 /**
@@ -1283,7 +1324,8 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     pendingSkipped: 0, forexRows: 0, installmentRows: 0, rowsParsed: 0,
     categorizedRows: 0, bankHintCategorized: 0, merchantKeywordCategorized: 0,
     taggedExportCategorized: 0, recurringPatternsCreated: 0, transferRows: 0,
-    transferPairsLinked: 0, categoriesCreated: 0, matchedExistingRecurring: 0,
+    transferPairsLinked: 0, categoriesCreated: 0, ccSettlementsFlagged: 0,
+    matchedExistingRecurring: 0,
     newPlansCreated: 0, rowsLinkedToPlans: 0,
     errors: [], distinctCards: [], needsManualMapping: false, message: msg, ...extra,
   });
@@ -1439,7 +1481,14 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     planMap.set(fp(p.merchantNormalized, Number(p.paymentAmountIls), p.totalPayments), p.id);
   }
 
-  const installmentRegex = /תשלום\s*(\d+)\s*מתוך\s*(\d+)/;
+  // Installment markers in notes — TWO patterns we accept:
+  //   "תשלום N מתוך Y"      → ongoing payment N of Y (used by Discount Key,
+  //                            bank-portal export, MasterCard, etc.)
+  //   "עסקה ב-N תשלומים"   → initial purchase row in the new Cal/Diners
+  //                            portal — the user just authorized N future
+  //                            payments. Treat as currentPaymentNo=1, total=N.
+  const installmentRegex     = /תשלום\s*(\d+)\s*מתוך\s*(\d+)/;
+  const installmentInitRegex = /עסקה\s*ב[־\-]\s*(\d+)\s*תשלומים/;
 
   // ── Pass 1: parse installment markers per row + identify plans we need
   // to create (those not in planMap yet). ───────────────────────────────────
@@ -1455,12 +1504,21 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       ? t.chargeDate.slice(0, 7)
       : computeBillingMonth(t.transactionDate, account.cutoffDay);
 
-    const m = (t.notes ?? '').match(installmentRegex);
-    if (!m) return { tx: t, merchantNorm, billingMonth, installment: null };
-
-    const N = Number(m[1]);
-    const Y = Number(m[2]);
-    if (!Number.isFinite(N) || !Number.isFinite(Y) || Y < 1 || N < 1) {
+    const notesStr = t.notes ?? '';
+    let N: number | null = null;
+    let Y: number | null = null;
+    const m = notesStr.match(installmentRegex);
+    if (m) {
+      N = Number(m[1]);
+      Y = Number(m[2]);
+    } else {
+      const initM = notesStr.match(installmentInitRegex);
+      if (initM) {
+        N = 1;
+        Y = Number(initM[1]);
+      }
+    }
+    if (!N || !Y || !Number.isFinite(N) || !Number.isFinite(Y) || Y < 1 || N < 1) {
       return { tx: t, merchantNorm, billingMonth, installment: null };
     }
     return {
@@ -1516,7 +1574,11 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   let taggedExportCategorized = 0;
   let bankHintCategorized = 0;
   let merchantKeywordCategorized = 0;
+  let ccSettlementsFlagged = 0;
   let rowsLinkedToPlans = 0;
+  // Bank-only flag: only run CC-settlement detection when this import is
+  // for a BANK account file. CC export files don't have CC settlement rows.
+  const isBankAccount = parsed.templateUsed?.type === 'bank';
   // For Pass 4 (after inserts): collect distinct merchants flagged as
   // recurring and create recurring_pattern rows for them.
   const recurringByMerchant = new Map<string, { categoryId: string | null; amountSigned: number }>();
@@ -1579,6 +1641,17 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       });
     }
 
+    // CC-settlement detection: when this row is on a BANK file AND the
+    // merchant name matches a CC-issuer pattern, mark as transfer so it
+    // doesn't double-count against the granular CC rows imported from
+    // the credit-card file. Examples:
+    //   • "כ.א.ל חיוב 15.18₪" on Discount checking → transfer (Cal will
+    //     ship the underlying ₪15.18 charge in its own file)
+    //   • "ויזה ק.ש.ר 142₪" on Leumi business → transfer
+    //   • "דיינרס חיוב 480₪" → transfer
+    const isCcSettlement = isBankAccount && looksLikeCcSettlement(tx.merchantRaw);
+    if (isCcSettlement) ccSettlementsFlagged++;
+
     return {
       householdId: ctx.householdId,
       accountId,
@@ -1594,9 +1667,11 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       notes: tx.notes,
       isManual: false,
       isInstallment: !!installment,
-      // Tagged-export transfer flag → set is_transfer for cross-account
-      // hops (no category, no recurring counts; just clean cash flow).
-      ...(tx.isTransferHint ? { isTransfer: true } : {}),
+      // is_transfer fires from EITHER the tagged-export העברה flag OR
+      // the CC-settlement detector. Either way the row is excluded from
+      // cash-flow totals (the granular detail comes from the matching
+      // CC excel import).
+      ...(tx.isTransferHint || isCcSettlement ? { isTransfer: true } : {}),
       ...(planId ? { installmentPlanId: planId } : {}),
       ...(ruleResult ? {
         categoryId:    ruleResult.categoryId,
@@ -1804,6 +1879,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         transferRows: inserts.filter((i) => i.isTransfer === true).length,
         transferPairsLinked,
         categoriesCreated,
+        ccSettlementsFlagged,
         matchedExistingRecurring,
         newPlansCreated,
         rowsLinkedToPlans,
@@ -1836,6 +1912,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       transferRows: inserts.filter((i) => i.isTransfer === true).length,
       transferPairsLinked,
       categoriesCreated,
+      ccSettlementsFlagged,
       matchedExistingRecurring,
       newPlansCreated,
       rowsLinkedToPlans,

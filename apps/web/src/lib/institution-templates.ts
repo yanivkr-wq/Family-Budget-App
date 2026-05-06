@@ -85,6 +85,10 @@ export interface InstitutionTemplate {
     /** Substring in the notes column that marks a row as pending — skip
      *  silently (no error reported). */
     pendingNotesMarker?: string;
+    /** Notes column carries forex info as a free-form string like
+     *  "סכום העסקה הוא 20.0 $" / "סכום העסקה הוא 14,90 €". When set, we
+     *  parse this out and populate originalAmount + originalCurrency. */
+    forexFromNotesString?: boolean;
   };
 }
 
@@ -153,8 +157,8 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     defaultIsExpense: true,
   },
 
-  // -------- Bank Leumi (current account / עובר ושב) --------
-  // Layout per the May-2026 export:
+  // -------- Israeli current-account "עובר ושב" (Leumi + Discount) --------
+  // Same layout across both banks (verified May-2026 exports):
   //   col 0 = תאריך
   //   col 1 = יום ערך
   //   col 2 = תיאור התנועה
@@ -163,13 +167,17 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
   //   col 5 = אסמכתה
   //   col 6 = עמלה
   //   col 7 = ערוץ ביצוע
-  // Negative = debit, positive = credit. This replaced the older split-column
-  // export Leumi used to ship.
+  // Negative = debit, positive = credit. ID kept as 'leumi' for backward
+  // compatibility with audit_log entries from earlier imports.
   {
     id: 'leumi',
-    name: 'בנק לאומי',
+    name: 'עו״ש ישראלי (לאומי / דיסקונט)',
     type: 'bank',
-    detectionKeywords: ['לאומי', 'תאריך ביצוע', 'יתרה לאחר', 'יום ערך'],
+    detectionKeywords: [
+      'לאומי', 'דיסקונט',
+      'תיאור התנועה', 'יום ערך',
+      'יתרה לאחר',
+    ],
     headerRowIndex: 'auto',
     columns: {
       transactionDate: 0,  // תאריך
@@ -303,6 +311,52 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     defaultIsExpense: true,
   },
 
+  // -------- Israeli CC-issuer portal export (Cal, Diners, Max, etc.) --------
+  // Newer 7-column format the issuers ship (as opposed to the bank-portal
+  // bank_export). Same shape across כ.א.ל ויזה / דיינרס / מקס etc.
+  // Layout per the May-2026 export:
+  //   col 0 = תאריך עסקה
+  //   col 1 = שם בית עסק
+  //   col 2 = סכום בש"ח (always ILS, prefixed with "₪ ")
+  //   col 3 = מועד חיוב (per-row charge date)
+  //   col 4 = סוג עסקה (רגילה / הוראת קבע / תשלומים / משיכת מזומן / חיוב חודשי)
+  //   col 5 = מזהה כרטיס בארנק דיגיטלי (e.g., "GooglePay 9648", "אינטרנט 3767")
+  //   col 6 = הערות
+  // Notes col patterns we extract:
+  //   • "סכום העסקה הוא X.XX $" → forex original amount + currency
+  //   • "עסקה ב-N תשלומים"     → installment marker (N total, currentNo=1)
+  //   • "תשלום N מתוך Y"        → installment marker (existing pattern)
+  // Detection: requires the unique "מזהה כרטיס בארנק דיגילטי" header (typo
+  // "דיגילטי" instead of "דיגיטלי" — the issuers ship it that way) plus
+  // "סכום בש"ח" to differentiate from the bank-portal exports.
+  {
+    id: 'il-cc-issuer-export',
+    name: 'ייצוא ישיר מחברת אשראי (כ.א.ל / דיינרס / מקס)',
+    type: 'credit_card',
+    detectionKeywords: [
+      'מזהה כרטיס בארנק דיגילטי',
+      'מזהה כרטיס בארנק',
+      'סכום בש"ח',
+      'פירוט עסקאות וזיכויים',
+    ],
+    headerRowIndex: 'auto',
+    columns: {
+      transactionDate: 0,
+      merchant:        1,
+      amount:          2,  // signed (the value comes "₪ 59.94" — prefix stripped by parseAmount)
+      chargeDate:      3,  // per-row
+      type:            4,  // for filtering / future use
+      notes:           6,
+    },
+    amountConvention: 'signed',
+    dateFormat: 'dd/mm/yyyy',
+    defaultIsExpense: true,
+    formatHandling: {
+      // Forex info is embedded in the notes string ("סכום העסקה הוא 20.0 $")
+      forexFromNotesString: true,
+    },
+  },
+
   // -------- Israeli "bank-portal" CC export (Diners via Leumi, Visa via Discount, etc.) --------
   // The bank's online portal exports your CC charges. Same structure
   // regardless of which bank/CC. Single sheet, 7 columns. Charge date is in
@@ -375,9 +429,11 @@ export const INSTITUTION_TEMPLATES: InstitutionTemplate[] = [
     defaultIsExpense: true,
     formatHandling: {
       multiSheet:        true,
-      // Sheet name "עסקאות חו"ל ומט"ח" — match on "חו"ל" or "ומט"ח" since
-      // the smart quote may vary between exports.
-      forexSheetPattern: /חו["'״]ל|ומט["'״]ח/,
+      // Sheet name patterns that contain forex / abroad transactions.
+      // Newer exports add "עסקאות בארנק מט"ח" (digital wallet forex)
+      // alongside the existing "עסקאות חו"ל ומט"ח". Both flag the whole
+      // sheet for immediate-charge handling.
+      forexSheetPattern: /חו["'״]ל|מט["'״]ח|ארנק.*מט/,
     },
   },
 ];

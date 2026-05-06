@@ -342,6 +342,19 @@ export async function smartImport(
           if (ext.amount !== null) originalAmount = ext.amount;
         }
       }
+      // Forex from notes string ("סכום העסקה הוא 20.0 $") — Cal/Diners
+      // 7-col portal exports embed forex info here. Parse symbol + amount.
+      if (handling.forexFromNotesString && notes) {
+        const m = /סכום\s*העסקה\s*הוא\s*([\d,.]+)\s*([₪$€£])/i.exec(notes);
+        if (m) {
+          const sym = m[2]!;
+          const amt = Number(m[1]!.replace(/,/g, '.'));
+          if (sym !== '₪' && Number.isFinite(amt)) {
+            originalCurrency = CURRENCY_PREFIX_MAP[sym] ?? sym;
+            originalAmount = amt;
+          }
+        }
+      }
 
       // isForex: STRICT — only when the original transaction was actually
       // in a non-NIS currency. Discount Key's "עסקאות חו"ל ומט"ח" sheet
