@@ -217,6 +217,16 @@ export interface UpdateTransactionInput {
   categoryId: string | null;
   subCategoryId: string | null;
   notes: string | null;
+  /** Mark as a cross-account transfer between the user's own accounts.
+   *  Excluded from combined-view income/expense totals so the same money
+   *  isn't counted twice. Optional — when undefined, existing value is
+   *  preserved. */
+  isTransfer?: boolean;
+  /** For project-tagged transactions: bring this specific row back into
+   *  the monthly cash flow even though its project is configured to
+   *  exclude. Models capex/opex — see helpers/project-filter.ts. Optional
+   *  — when undefined, existing value is preserved. */
+  includeInMonthlyOverride?: boolean;
 }
 
 export async function updateTransaction(
@@ -324,6 +334,12 @@ export async function updateTransaction(
       // the ⚡ indicator survives a save-without-change.
       ...(input.categoryId !== existing.categoryId
         ? { appliedRuleId: null, categorySource: input.categoryId ? 'manual' : null }
+        : {}),
+      // isTransfer: only update if the caller explicitly passed it. Lets the
+      // user toggle this without us touching the field on every save.
+      ...(input.isTransfer !== undefined ? { isTransfer: input.isTransfer } : {}),
+      ...(input.includeInMonthlyOverride !== undefined
+        ? { includeInMonthlyOverride: input.includeInMonthlyOverride }
         : {}),
       updatedAt: new Date(),
     })

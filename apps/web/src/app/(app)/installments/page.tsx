@@ -17,54 +17,56 @@ export default async function InstallmentsPage() {
   const db = getDb();
   const { householdId } = session.user;
 
-  // ── Fetch plans with account name + linked transaction count ──────────────
-  const plans = await db
-    .select({
-      id:                schema.installmentPlans.id,
-      merchantNormalized:schema.installmentPlans.merchantNormalized,
-      description:       schema.installmentPlans.description,
-      paymentAmountIls:  schema.installmentPlans.paymentAmountIls,
-      totalPayments:     schema.installmentPlans.totalPayments,
-      currentPaymentNo:  schema.installmentPlans.currentPaymentNo,
-      startMonth:        schema.installmentPlans.startMonth,
-      projectedEndMonth: schema.installmentPlans.projectedEndMonth,
-      actualEndMonth:    schema.installmentPlans.actualEndMonth,
-      accountId:         schema.installmentPlans.accountId,
-      status:            schema.installmentPlans.status,
-      notes:             schema.installmentPlans.notes,
-      accountName:       schema.accounts.name,
-    })
-    .from(schema.installmentPlans)
-    .leftJoin(
-      schema.accounts,
-      eq(schema.installmentPlans.accountId, schema.accounts.id),
-    )
-    .where(eq(schema.installmentPlans.householdId, householdId))
-    .orderBy(schema.installmentPlans.status, schema.installmentPlans.startMonth);
+  // Three independent reads → run them all in parallel.
+  const [plans, txCounts, accounts] = await Promise.all([
+    db
+      .select({
+        id:                schema.installmentPlans.id,
+        merchantNormalized:schema.installmentPlans.merchantNormalized,
+        description:       schema.installmentPlans.description,
+        paymentAmountIls:  schema.installmentPlans.paymentAmountIls,
+        totalPayments:     schema.installmentPlans.totalPayments,
+        currentPaymentNo:  schema.installmentPlans.currentPaymentNo,
+        startMonth:        schema.installmentPlans.startMonth,
+        projectedEndMonth: schema.installmentPlans.projectedEndMonth,
+        actualEndMonth:    schema.installmentPlans.actualEndMonth,
+        accountId:         schema.installmentPlans.accountId,
+        status:            schema.installmentPlans.status,
+        notes:             schema.installmentPlans.notes,
+        accountName:       schema.accounts.name,
+      })
+      .from(schema.installmentPlans)
+      .leftJoin(
+        schema.accounts,
+        eq(schema.installmentPlans.accountId, schema.accounts.id),
+      )
+      .where(eq(schema.installmentPlans.householdId, householdId))
+      .orderBy(schema.installmentPlans.status, schema.installmentPlans.startMonth),
 
-  // ── Linked transaction counts per plan ────────────────────────────────────
-  const txCounts = await db
-    .select({
-      installmentPlanId: schema.transactions.installmentPlanId,
-      cnt:               count(),
-    })
-    .from(schema.transactions)
-    .where(
-      and(
-        eq(schema.transactions.householdId, householdId),
-        sql`${schema.transactions.installmentPlanId} IS NOT NULL`,
-      ),
-    )
-    .groupBy(schema.transactions.installmentPlanId);
+    // Linked transaction counts per plan.
+    db
+      .select({
+        installmentPlanId: schema.transactions.installmentPlanId,
+        cnt:               count(),
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.householdId, householdId),
+          sql`${schema.transactions.installmentPlanId} IS NOT NULL`,
+        ),
+      )
+      .groupBy(schema.transactions.installmentPlanId),
+
+    // Accounts for the add/edit modal.
+    db
+      .select({ id: schema.accounts.id, name: schema.accounts.name })
+      .from(schema.accounts)
+      .where(and(eq(schema.accounts.householdId, householdId), eq(schema.accounts.isActive, true)))
+      .orderBy(schema.accounts.name),
+  ]);
 
   const txCountMap = new Map(txCounts.map((r) => [r.installmentPlanId!, Number(r.cnt)]));
-
-  // ── Accounts for the add/edit modal ──────────────────────────────────────
-  const accounts = await db
-    .select({ id: schema.accounts.id, name: schema.accounts.name })
-    .from(schema.accounts)
-    .where(and(eq(schema.accounts.householdId, householdId), eq(schema.accounts.isActive, true)))
-    .orderBy(schema.accounts.name);
 
   // ── Summary stats ────────────────────────────────────────────────────────
   const active    = plans.filter((p) => p.status === 'active');
@@ -73,10 +75,12 @@ export default async function InstallmentsPage() {
   // Monthly commitment = sum of active payment amounts
   const monthlyCommitment = active.reduce((s, p) => s + Math.abs(Number(p.paymentAmountIls)), 0);
 
-  // Total remaining across all active plans
+  // Total remaining across all active plans.
+  // currentPaymentNo = payments made so far. Remaining = total - current.
+  // (Was off by +1 — counted the current payment AGAIN even though it's done.)
   const totalRemaining = active.reduce((s, p) => {
     const rem = p.totalPayments
-      ? Math.max(0, p.totalPayments - p.currentPaymentNo + 1)
+      ? Math.max(0, p.totalPayments - p.currentPaymentNo)
       : null;
     return rem !== null ? s + rem * Math.abs(Number(p.paymentAmountIls)) : s;
   }, 0);

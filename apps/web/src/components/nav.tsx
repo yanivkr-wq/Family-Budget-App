@@ -20,6 +20,7 @@ import {
   History,
   PiggyBank,
   MessageSquare,
+  Briefcase,
   type LucideIcon,
 } from 'lucide-react';
 import { he } from '@fba/shared';
@@ -41,6 +42,7 @@ const LINKS: NavLink[] = [
   { href: '/import', label: 'ייבוא בנק/אשראי', icon: Upload, group: 'main' },
   { href: '/recurring', label: he.nav.recurring, icon: Repeat, group: 'main' },
   { href: '/installments', label: he.nav.installments, icon: Receipt, group: 'main' },
+  { href: '/projects', label: 'פרויקטים', icon: Briefcase, group: 'main' },
   { href: '/savings', label: he.nav.savings, icon: PiggyBank, group: 'main' },
   { href: '/insights', label: he.nav.insights, icon: Sparkles, group: 'main', mobile: true },
   { href: '/history', label: he.nav.history, icon: HistoryIcon, group: 'main' },

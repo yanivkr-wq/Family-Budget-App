@@ -19,6 +19,7 @@ import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
 import { readActiveView } from '@/components/view-tabs-server';
 import { MonthSwitcher } from './transactions/month-switcher';
 import { INSIGHT_ICONS, type InsightIconName } from './dashboard-insight-icons';
+import { excludeHiddenProjectTxns } from '@/lib/project-filter';
 import {
   Wallet,
   TrendingDown,
@@ -32,6 +33,7 @@ import {
   Sparkles,
   ChevronLeft,
   Info,
+  Briefcase,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -68,6 +70,7 @@ export default async function DashboardPage(props: {
               eq(schema.transactions.householdId, householdId),
               isNull(schema.transactions.deletedAt),
               eq(schema.transactions.isProjected, false),
+              excludeHiddenProjectTxns(),
               sql`${schema.transactions.billingMonth} <= ${cur}`,
             ),
           ),
@@ -96,6 +99,10 @@ export default async function DashboardPage(props: {
     eq(schema.transactions.billingMonth, month),
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, false),
+    // Hide transactions tagged to a project with excludeFromMonthlyTotals=true
+    // (e.g. multi-year construction). They have their own per-project view at
+    // /projects/[id]; including them here would drown out regular spending.
+    excludeHiddenProjectTxns(),
   ];
   if (view === 'combined') {
     baseConditions.push(eq(schema.transactions.isTransfer, false));
@@ -115,6 +122,7 @@ export default async function DashboardPage(props: {
     eq(schema.transactions.billingMonth, month),
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, true),
+    excludeHiddenProjectTxns(),
   ];
   if (accountFilter && accountFilter.length > 0) {
     projectedConditions.push(inArray(schema.transactions.accountId, accountFilter));
@@ -238,15 +246,45 @@ export default async function DashboardPage(props: {
   // ── Synchronous derivations from the parallel batch results ───────────────
   const catMap = new Map(cats.map((c) => [c.id, c]));
 
+  // ── Income / Expense classification ────────────────────────────────────────
+  // We use SIGN as the source of truth, not category type. Reasons:
+  //   1. Categories don't always match sign — a "savings" category can carry
+  //      a positive amount when it represents a transfer-in or loan disbursement
+  //      that the user (or auto-categorization) tagged there. Treating it
+  //      as a negative-expense by category-rule produces the wrong income/
+  //      expense split.
+  //   2. Sign is unambiguous: positive amount = money came in, negative
+  //      amount = money went out. Always.
+  //   3. The displayed balance (income − expenses) stays mathematically
+  //      identical to "sum of all amounts", so users see the same bottom
+  //      line regardless of how categories are tagged.
+  //
+  // Trade-off: refunds (positive amounts on expense categories) now count as
+  // income rather than reducing expenses. We accept this — refunds ARE money
+  // coming in, and treating them otherwise creates the inverse problem of
+  // hiding real income.
+  //
+  // Side calc: detect "suspicious" rows — large positive amounts on expense
+  // categories. These are usually unflagged transfers between the user's
+  // own accounts. Surface a soft warning so the user can re-tag them as
+  // transfers (which then get excluded from the combined view).
   let totalIncome = 0;
   let totalSpent = 0;
+  let suspiciousIncomeIls = 0; // sum of positive amounts on non-income cats
   for (const t of totals) {
     const cat = t.categoryId ? catMap.get(t.categoryId) : null;
     const v = Number(t.total);
-    if (cat?.isIncome) totalIncome += v;
-    else totalSpent += v;
+    if (v >= 0) totalIncome += v;
+    else        totalSpent  += v;
+    if (v > 1000 && cat && !cat.isIncome) {
+      suspiciousIncomeIls += v;
+    }
   }
 
+  // balance = income + spent (spent is negative). Equivalent to:
+  //   income − abs(spent).
+  // This always equals the raw net of all amounts, regardless of how they're
+  // categorized — so the bottom-line balance never lies.
   const balance = totalIncome + totalSpent;
   const spent = Math.abs(totalSpent);
 
@@ -279,7 +317,18 @@ export default async function DashboardPage(props: {
   // change correctly when switching אישי / עסקי / משולב. Without the
   // accountFilter, MoM comparison and installment plans were aggregated
   // across ALL accounts regardless of which view the user picked.
-  const [prevTotals, endingPlans, activeInstallmentPlans] = await Promise.all([
+  // Parallel batch 3: prev-month MoM, installment-plan insights, AND the two
+  // standalone reads (active projects, recurring patterns). All five queries
+  // depend only on `householdId`, `month`, `prevMonth`, and `accountFilter` —
+  // values known before this batch runs — so collapsing them into a single
+  // round-trip shaves an extra ~RTT off every dashboard load.
+  const [
+    prevTotals,
+    endingPlans,
+    activeInstallmentPlans,
+    activeProjects,
+    activeRecurringPatterns,
+  ] = await Promise.all([
     // (i) last month category totals — for MoM comparison (view-scoped)
     db
       .select({
@@ -293,6 +342,7 @@ export default async function DashboardPage(props: {
           eq(schema.transactions.billingMonth, prevMonth),
           isNull(schema.transactions.deletedAt),
           eq(schema.transactions.isProjected, false),
+          excludeHiddenProjectTxns(),
           accountFilter !== null
             ? inArray(schema.transactions.accountId, accountFilter)
             : undefined,
@@ -350,26 +400,65 @@ export default async function DashboardPage(props: {
             : undefined,
         ),
       ),
-  ]);
 
-  // ── Active recurring patterns (subscriptions / monthly bills). Used by
-  // the KPI tile, the dedicated dashboard widget below, and the
-  // "recurring as % of income" insight. ────────────────────────────────────
-  const activeRecurringPatterns = await db
-    .select({
-      merchantNormalized: schema.recurringPatterns.merchantNormalized,
-      description:        schema.recurringPatterns.description,
-      categoryId:         schema.recurringPatterns.categoryId,
-      expectedAmountIls:  schema.recurringPatterns.expectedAmountIls,
-      frequency:          schema.recurringPatterns.frequency,
-    })
-    .from(schema.recurringPatterns)
-    .where(
-      and(
-        eq(schema.recurringPatterns.householdId, householdId),
-        eq(schema.recurringPatterns.status, 'active'),
+    // (l) Active projects + their cumulative spend.
+    // Regular monthly totals deliberately EXCLUDE project transactions
+    // (per excludeFromMonthlyTotals), but the user still wants to know the
+    // projects exist + what they've cost so far — otherwise the ₪547K spent
+    // on construction is invisible from the home page.
+    //
+    // Inner `t` (transaction) has its own `id` column, so writing
+    // `${schema.projects.id}` here would render as unqualified `"id"` and
+    // resolve to `t.id` instead of `project.id`. Always write the
+    // table-qualified form explicitly in correlated subqueries.
+    db
+      .select({
+        id:             schema.projects.id,
+        name:           schema.projects.name,
+        color:          schema.projects.color,
+        totalBudgetIls: schema.projects.totalBudgetIls,
+        status:         schema.projects.status,
+        excludeFromMonthlyTotals: schema.projects.excludeFromMonthlyTotals,
+        totalSpent: sql<string>`(
+          SELECT COALESCE(SUM(ABS(t.amount_ils::numeric)), 0)
+          FROM ${schema.transactions} t
+          WHERE t.project_id = "project"."id"
+            AND t.deleted_at IS NULL
+            AND t.is_projected = false
+        )`,
+        txnCount: sql<string>`(
+          SELECT COUNT(*) FROM ${schema.transactions} t
+          WHERE t.project_id = "project"."id"
+            AND t.deleted_at IS NULL
+            AND t.is_projected = false
+        )`,
+      })
+      .from(schema.projects)
+      .where(and(
+        eq(schema.projects.householdId, householdId),
+        eq(schema.projects.status, 'active'),
+      ))
+      .orderBy(schema.projects.createdAt),
+
+    // (m) Active recurring patterns (subscriptions / monthly bills). Used by
+    // the KPI tile, the dedicated dashboard widget below, and the
+    // "recurring as % of income" insight.
+    db
+      .select({
+        merchantNormalized: schema.recurringPatterns.merchantNormalized,
+        description:        schema.recurringPatterns.description,
+        categoryId:         schema.recurringPatterns.categoryId,
+        expectedAmountIls:  schema.recurringPatterns.expectedAmountIls,
+        frequency:          schema.recurringPatterns.frequency,
+      })
+      .from(schema.recurringPatterns)
+      .where(
+        and(
+          eq(schema.recurringPatterns.householdId, householdId),
+          eq(schema.recurringPatterns.status, 'active'),
+        ),
       ),
-    );
+  ]);
 
   // Normalise each pattern to its monthly equivalent so all sums compare
   // apples-to-apples regardless of cadence (bimonthly ÷ 2, quarterly ÷ 3,
@@ -547,24 +636,84 @@ export default async function DashboardPage(props: {
         </div>
       )}
 
+      {/* Untagged-transfer warning. Kicks in when we detect ≥₪1000 of
+          POSITIVE amounts on non-income categories — almost always means
+          the user has a cross-account transfer (e.g. business → personal
+          salary, savings withdrawal) that didn't get isTransfer=true at
+          import time. The amount is currently inflating "Income" and the
+          fix is one-click in the transactions edit modal. */}
+      {suspiciousIncomeIls > 0 && (
+        <div className="rounded-md border border-amber-300/60 bg-amber-50/70 p-3 text-sm text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-100">
+          <p className="font-medium">
+            ⚠️ זוהו {formatIls(suspiciousIncomeIls, { decimals: false })} בתנועות חיוביות גדולות בקטגוריות הוצאה
+          </p>
+          <p className="mt-1 text-xs">
+            לרוב אלו <strong>העברות בין החשבונות שלך</strong> (למשל הפקדה מבנק לבנק) שלא סומנו כ-&ldquo;העברה&rdquo; בעת הייבוא.
+            הן מנפחות את הכרטיס &ldquo;הכנסות&rdquo; — המאזן עצמו ({formatIls(balance, { decimals: false })}) נכון, אבל הפיצול בין הכנסה להוצאה מטעה.
+            פתח את <Link href={`/transactions?month=${month}`} className="underline font-medium">דף התנועות</Link>,
+            מצא את התנועה הגדולה (סנן לפי הקטגוריה הרלוונטית), פתח עריכה וסמן &ldquo;זוהי העברה בין חשבונות&rdquo;.
+          </p>
+        </div>
+      )}
+
       <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <Tile
           label={he.dashboard.spentSoFar}
           value={formatIls(spent, { decimals: false })}
           caption={isCurrentMonth ? `יום ${day} מתוך ${daysInMonth}` : undefined}
           icon={<TrendingDown className="size-3.5" />}
+          info={
+            'איך החישוב עובד:\n' +
+            `• סכמתי את כל התנועות עם billing_month = ${month}.\n` +
+            `• נספרות תנועות ${view === 'combined' ? 'בכל החשבונות (משולב, ללא העברות פנימיות)' : view === 'personal' ? 'בחשבונות אישיים + משותפים' : 'בחשבונות עסקיים + משותפים'}.\n` +
+            '• "הוצאות" = סכום מוחלט של כל התנועות עם סכום שלילי (כסף שיצא).\n' +
+            '• הקטגוריה לא משפיעה — מה שקובע זה הסימן (חיובי = הכנסה, שלילי = הוצאה).\n' +
+            '• אם תייגת תנועה בקטגוריית הוצאה והסכום חיובי (החזר/זיכוי), היא תיחשב להכנסה ולא תקטין את ההוצאות.\n' +
+            '• מוסטרות: תנועות מחוקות, תנועות "צפוי", ותנועות שמתויגות לפרויקט עם "הסתר מהתצוגות החודשיות".\n' +
+            `\nתוצאה: ${formatIls(spent, { decimals: false })}.`
+          }
         />
         <Tile
           label="הכנסות"
           value={formatIls(totalIncome, { decimals: false })}
           tone={totalIncome > 0 ? 'success' : 'neutral'}
           icon={<TrendingUp className="size-3.5" />}
+          info={
+            'איך החישוב עובד:\n' +
+            '• "הכנסות" = סכום של כל התנועות החיוביות (כסף שנכנס).\n' +
+            '• הקטגוריה לא משפיעה — מה שקובע זה הסימן.\n' +
+            '• כולל: משכורת, קצבה, זיכויים, החזרים, הכנסות מהעסק.\n' +
+            '• בטאב "משולב" — העברות בין חשבונות שלך מוסטרות (אין כפל ספירה — אם סימנת אותן כ-isTransfer בעת הייבוא או בעריכה).\n' +
+            '• בטאב אישי / עסקי — מסונן לחשבונות מאותו סוג.\n' +
+            '• מוסטרות: תנועות מחוקות, "צפוי", ופרויקטים מוסתרים.\n' +
+            (suspiciousIncomeIls > 0
+              ? `\n⚠️ זוהו ${formatIls(suspiciousIncomeIls, { decimals: false })} בתנועות חיוביות גדולות שמתויגות בקטגוריות הוצאה. ` +
+                'לרוב אלו העברות בין החשבונות שלך שלא סומנו כ"העברה". ' +
+                'מומלץ לעבור לדף תנועות, לסנן לפי קטגוריה רלוונטית, ולסמן ידנית את התנועות הללו כ"העברה".\n'
+              : '') +
+            `\nתוצאה: ${formatIls(totalIncome, { decimals: false })}.`
+          }
         />
         <Tile
           label={he.dashboard.monthBalance}
           value={formatIls(balance, { decimals: false })}
           tone={balance >= 0 ? 'success' : 'destructive'}
           icon={<Wallet className="size-3.5" />}
+          info={
+            'איך החישוב עובד:\n' +
+            'מאזן = הכנסות − הוצאות\n' +
+            `\n• הכנסות החודש: ${formatIls(totalIncome, { decimals: false })}    (כסף שנכנס)\n` +
+            `• הוצאות החודש: ${formatIls(spent, { decimals: false })}    (כסף שיצא)\n` +
+            `• מאזן: ${formatIls(totalIncome, { decimals: false })} − ${formatIls(spent, { decimals: false })} = ${formatIls(balance, { decimals: false })}\n` +
+            '\nמשמעות:\n' +
+            '• מאזן חיובי = הוצאת פחות ממה שהרווחת (יתרה לחיסכון/חודש הבא).\n' +
+            '• מאזן שלילי = הוצאת יותר ממה שהרווחת (אם זה לא חודש מיוחד — שווה לבדוק).\n' +
+            '\nשים לב: זה המאזן עד היום (תנועות בפועל) ולא תחזית עד סוף החודש. ' +
+            'לתחזית סוף-חודש ראה את הכרטיס ליד.\n' +
+            '\nמוסטרות מהחישוב: תנועות מחוקות, תנועות "צפוי" (מתוכננות), ותנועות שמתויגות ' +
+            'לפרויקט עם "הסתר מהתצוגות החודשיות". ' +
+            (view === 'combined' ? 'בטאב משולב — העברות בין חשבונות שלך (isTransfer=true) מוסטרות.' : '')
+          }
         />
         <Tile
           label={
@@ -619,6 +768,24 @@ export default async function DashboardPage(props: {
             totalIncome > 0
               ? `${Math.round((recurringMonthlyExpense / totalIncome) * 100)}% מההכנסות`
               : undefined
+          }
+          info={
+            'איך החישוב עובד:\n' +
+            'סכמתי את כל ההוצאות הקבועות הפעילות (תבניות status=active מ-/recurring), ' +
+            'ונרמלתי כל אחת לסכום חודשי לפי תדירות:\n' +
+            '• חודשי × 1\n' +
+            '• דו-חודשי ÷ 2\n' +
+            '• רבעוני ÷ 3\n' +
+            '• שנתי ÷ 12\n' +
+            '\nרק תבניות הוצאה (סכום שלילי) נספרות כאן. הכנסות קבועות (כמו ' +
+            'משכורת חוזרת) מופיעות בנפרד בכרטיס "הכנסות קבועות חודשיות" ' +
+            'בווידג׳ט הקבועות למטה.\n' +
+            '\nההפרש בין כרטיס זה לכרטיס "הוצאות" שלמעלה: כרטיס זה מציג את ' +
+            'הסכום הצפוי על-פי התבניות שהגדרת (גם אם החיוב עוד לא הופיע השבוע), ' +
+            'בעוד שכרטיס ההוצאות מציג רק תנועות שכבר נקלטו בפועל החודש.\n' +
+            (totalIncome > 0
+              ? `\nאחוז מההכנסות: ${formatIls(recurringMonthlyExpense, { decimals: false })} ÷ ${formatIls(totalIncome, { decimals: false })} = ${Math.round((recurringMonthlyExpense / totalIncome) * 100)}%.`
+              : '')
           }
         />
       </section>
@@ -757,13 +924,12 @@ export default async function DashboardPage(props: {
             </section>
           </div>
 
-          {/* ── Side-by-side row: Recurring overview + Savings snapshot ──
-              Sits right under the donut/categories grid so the user reads
-              top-to-bottom: per-category spend → fixed monthly commitments
-              & savings → recent transactions. Both children self-hide
-              when their data is empty; the wrapper renders if either
-              has data. ── */}
-          {(activeRecurringPatterns.length > 0 || activeGoals.length > 0) && (
+          {/* ── Side-by-side row: Recurring overview (left) + Savings stack (right).
+              The right column is a vertical stack of:  Savings → Projects.
+              Layout chosen so the user reads top-to-bottom:
+                per-category spend → fixed commitments + (savings/projects) → transactions.
+              Each child self-hides when empty; wrapper renders if any have data. ── */}
+          {(activeRecurringPatterns.length > 0 || activeGoals.length > 0 || activeProjects.length > 0) && (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {activeRecurringPatterns.length > 0 && (
                 <section className="tile space-y-4" dir="rtl">
@@ -877,7 +1043,11 @@ export default async function DashboardPage(props: {
                 </section>
               )}
 
-              {/* Savings snapshot — paired side-by-side with Recurring above. */}
+              {/* Right column stack: Savings on top, Projects beneath.
+                  Wrapper renders if EITHER child has data so the column
+                  isn't empty when only one of the two is present. */}
+              {(activeGoals.length > 0 || activeProjects.length > 0) && (
+              <div className="space-y-6">
               {activeGoals.length > 0 && (
                 <section className="tile space-y-4">
                   {/* header */}
@@ -949,10 +1119,17 @@ export default async function DashboardPage(props: {
                   )}
                 </section>
               )}
+              {/* Projects widget — sits directly under savings inside the
+                  right column (per design illustration). */}
+              {activeProjects.length > 0 && (
+                <ProjectsSummaryWidget projects={activeProjects} />
+              )}
+              </div>
+              )}
             </div>
           )}
 
-          {/* ── Transactions strip ── */}
+          {/* ── Transactions strip — full width ── */}
           <DashboardTransactionsSection
             transactions={dashboardTxns}
             month={month}
@@ -960,7 +1137,125 @@ export default async function DashboardPage(props: {
           />
         </>
       )}
+
+      {/* When the dashboard has no monthly data (empty state branch above),
+          the projects widget still needs to be visible so the user can see
+          their long-running projects. Render it standalone here. */}
+      {!hasData && activeProjects.length > 0 && (
+        <ProjectsSummaryWidget projects={activeProjects} />
+      )}
     </div>
+  );
+}
+
+// ── Projects summary widget ──────────────────────────────────────────────────
+function ProjectsSummaryWidget({
+  projects,
+}: {
+  projects: Array<{
+    id: string;
+    name: string;
+    color: string | null;
+    totalBudgetIls: string | null;
+    status: string;
+    excludeFromMonthlyTotals: boolean;
+    totalSpent: string;
+    txnCount: string;
+  }>;
+}) {
+  const grandTotal = projects.reduce((s, p) => s + Number(p.totalSpent), 0);
+
+  return (
+    <section className="rounded-xl border bg-card overflow-hidden" dir="rtl">
+      <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <Briefcase className="size-4 text-amber-600" />
+          פרויקטים פעילים
+          <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+            {projects.length}
+          </span>
+        </h2>
+        <Link href="/projects" className="text-xs text-primary hover:underline">
+          ניהול ←
+        </Link>
+      </div>
+      {/* Disclaimer banner — explain WHY these don't appear in monthly tiles */}
+      <div className="border-b bg-amber-50/60 px-4 py-2 text-[11px] text-amber-900 dark:bg-amber-900/10 dark:text-amber-200">
+        💡 הסכומים כאן <strong>לא נספרים</strong> בכרטיסי הוצאות / הכנסות / מאזן
+        החודשיים — פרויקטים גדולים מנוהלים בנפרד כדי שלא יציפו את התזרים הרגיל.
+      </div>
+      <ul className="divide-y">
+        {projects.map((p) => {
+          const spent = Number(p.totalSpent);
+          const budget = p.totalBudgetIls ? Number(p.totalBudgetIls) : null;
+          const pct = budget && budget > 0 ? Math.round((spent / budget) * 100) : null;
+          const overBudget = pct !== null && pct >= 100;
+          const nearBudget = pct !== null && pct >= 80 && pct < 100;
+          const barColor = overBudget
+            ? 'var(--destructive)'
+            : nearBudget
+              ? 'var(--warning)'
+              : (p.color ?? 'var(--primary)');
+          return (
+            <li key={p.id}>
+              <Link
+                href={`/projects/${p.id}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-accent/30 transition-colors"
+              >
+                {p.color && (
+                  <span
+                    className="size-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: p.color }}
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-medium truncate">{p.name}</span>
+                    <span className="text-sm tabular-nums">
+                      <span className="font-semibold">{formatIls(spent, { decimals: false })}</span>
+                      {budget !== null && (
+                        <span className="text-muted-foreground text-xs">
+                          {' / '}{formatIls(budget, { decimals: false })}
+                          {pct !== null && (
+                            <span className={cn(
+                              'ms-1.5',
+                              overBudget && 'text-destructive font-medium',
+                              nearBudget && 'text-warning',
+                            )}>
+                              ({pct}%)
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  {budget !== null && pct !== null && (
+                    <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full transition-all"
+                        style={{ width: `${Math.min(100, pct)}%`, backgroundColor: barColor }}
+                      />
+                    </div>
+                  )}
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    {p.txnCount} תנועות
+                  </div>
+                </div>
+                <ChevronLeft className="size-3.5 shrink-0 text-muted-foreground" />
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      {projects.length > 1 && (
+        <div className="flex items-center justify-between border-t bg-muted/10 px-4 py-2 text-xs">
+          <span className="text-muted-foreground">סה״כ בכל הפרויקטים</span>
+          <span className="font-semibold tabular-nums">
+            {formatIls(grandTotal, { decimals: false })}
+          </span>
+        </div>
+      )}
+    </section>
   );
 }
 

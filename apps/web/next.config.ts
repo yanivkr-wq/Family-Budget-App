@@ -23,14 +23,31 @@ const nextConfig: NextConfig = {
         '192.168.68.102:3010',
       ],
     },
+    // Tree-shake big libs — keeps the JS payload small per route.
+    // recharts is dynamic-imported but still benefits when its bundle compiles.
     optimizePackageImports: [
       'lucide-react',
+      'recharts',
       '@radix-ui/react-dialog',
       '@radix-ui/react-dropdown-menu',
       '@radix-ui/react-select',
       '@radix-ui/react-toast',
       '@radix-ui/react-popover',
     ],
+    // Client router cache: how long an already-rendered page stays fresh
+    // when the user navigates back to it. Default in Next 15 is 0s (every
+    // back-nav refetches). 30s makes tab-switching feel INSTANT — clicking
+    // /transactions → /recurring → /transactions reuses the cached HTML
+    // for the second /transactions hit instead of waiting on the server.
+    // After 30s, Next refetches naturally; mutations call revalidatePath()
+    // so the cache is busted on writes regardless of TTL.
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
+    // Dev only: cache server-component fetches across HMR reloads so
+    // editing a client component doesn't re-run every server-side query.
+    serverComponentsHmrCache: true,
   },
   serverExternalPackages: ['postgres', '@node-rs/argon2'],
   transpilePackages: ['@fba/db', '@fba/shared'],

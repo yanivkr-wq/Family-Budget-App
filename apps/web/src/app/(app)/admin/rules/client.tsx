@@ -28,6 +28,7 @@ import {
   Sparkles,
   Repeat,
   X,
+  Filter,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NlRuleModal } from './nl-rule-modal';
@@ -81,15 +82,40 @@ export function RulesAdminClient(props: {
   const router = useRouter();
   const searchParams = useSearchParams();
   const openedViaDeepLink = useRef(false);
+  // Track whether we've already auto-opened the edit modal for the current
+  // ?edit param. Without this, every searchParams change (e.g. when the
+  // user clicks a filter) would re-fire and re-open the modal mid-edit.
+  const handledEditRef = useRef<string | null>(null);
   useEffect(() => {
     const editId = searchParams.get('edit');
     if (!editId) return;
+    if (handledEditRef.current === editId) return;
     const rule = props.rules.find((r) => r.id === editId);
     if (rule) {
       setEditing(rule);
       openedViaDeepLink.current = true;
+      handledEditRef.current = editId;
     }
   }, [searchParams, props.rules]);
+
+  // Scroll-and-flash: when arriving via ?highlight=<ruleId> (alternative to
+  // ?edit=, used when the link should bring the rule into view without
+  // forcing the modal open — e.g., from the global search palette), find
+  // the row and scroll it into view with a brief yellow highlight.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  useEffect(() => {
+    const hl = searchParams.get('highlight');
+    if (!hl) return;
+    setHighlightId(hl);
+    // Scroll into view on the next paint so the row has rendered.
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`rule-row-${hl}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    // Clear the highlight after 2.5s so it doesn't linger forever.
+    const timer = setTimeout(() => setHighlightId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [searchParams]);
 
   function closeEditModal() {
     setEditing(null);
@@ -121,18 +147,60 @@ export function RulesAdminClient(props: {
       }
     })();
   }
-  const [search, setSearch] = useState('');
+  // Multi-axis filter state. Persisted in component state only (URL-less)
+  // since rules-page is a power-tools admin screen, not a shareable view.
+  const [search, setSearch]               = useState('');
+  const [filterCategory, setFilterCategory] = useState<string>(''); // '' = any
+  const [filterSource, setFilterSource]     = useState<'all' | 'user' | 'llm_confirmed' | 'pending'>('all');
+  const [filterStatus, setFilterStatus]     = useState<'all' | 'active' | 'inactive'>('all');
+  const [filterAccount, setFilterAccount]   = useState<string>(''); // '' = any
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return props.rules;
-    const q = search.toLowerCase();
-    return props.rules.filter(
-      (r) =>
-        (r.name?.toLowerCase().includes(q) ?? false) ||
-        r.pattern.toLowerCase().includes(q) ||
-        (r.description?.toLowerCase().includes(q) ?? false),
-    );
-  }, [props.rules, search]);
+    const q = search.trim().toLowerCase();
+    return props.rules.filter((r) => {
+      // Text search across name + pattern + description + notes pattern.
+      // Empty query matches everything.
+      if (q) {
+        const haystack = [
+          r.name ?? '',
+          r.pattern,
+          r.description ?? '',
+          r.notesPattern ?? '',
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      // Category filter — match either parent or sub category.
+      if (filterCategory && r.categoryId !== filterCategory && r.subCategoryId !== filterCategory) {
+        return false;
+      }
+      // Source filter — distinguishes user-created, AI-confirmed, pending.
+      if (filterSource !== 'all' && r.source !== filterSource) return false;
+      // Status filter — active vs disabled rules.
+      if (filterStatus === 'active' && !r.isActive) return false;
+      if (filterStatus === 'inactive' && r.isActive) return false;
+      // Account scope filter — show rules limited to a specific account
+      // (or the inverse: rules that apply to ALL accounts).
+      if (filterAccount === '__none' && r.appliesToAccountId !== null) return false;
+      if (filterAccount && filterAccount !== '__none' && r.appliesToAccountId !== filterAccount) return false;
+      return true;
+    });
+  }, [props.rules, search, filterCategory, filterSource, filterStatus, filterAccount]);
+
+  // Active-filter count for the "clear filters" pill.
+  const activeFilterCount =
+    (search.trim() ? 1 : 0) +
+    (filterCategory ? 1 : 0) +
+    (filterSource !== 'all' ? 1 : 0) +
+    (filterStatus !== 'all' ? 1 : 0) +
+    (filterAccount ? 1 : 0);
+
+  function clearFilters() {
+    setSearch('');
+    setFilterCategory('');
+    setFilterSource('all');
+    setFilterStatus('all');
+    setFilterAccount('');
+  }
 
   const catNameById = useMemo(
     () => new Map(props.topCategories.concat(props.subCategories).map((c) => [c.id, c.nameHe])),
@@ -168,14 +236,76 @@ export function RulesAdminClient(props: {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      {/* ── Filter bar: text + category + source + status + account ── */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-2">
         <input
           type="search"
-          placeholder="חיפוש כלל…"
+          placeholder="חיפוש בשם / דפוס / הערה / תיאור…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="form-input w-60"
+          className="form-input flex-1 min-w-[200px]"
         />
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value)}
+          className="form-input w-44"
+          title="סנן לפי קטגוריה (כולל תת-קטגוריות)"
+        >
+          <option value="">כל הקטגוריות</option>
+          {props.topCategories.map((c) => (
+            <option key={c.id} value={c.id}>{c.nameHe}</option>
+          ))}
+          {props.subCategories.length > 0 && <option disabled>──────────</option>}
+          {props.subCategories.map((c) => (
+            <option key={c.id} value={c.id}>↳ {c.nameHe}</option>
+          ))}
+        </select>
+        <select
+          value={filterSource}
+          onChange={(e) => setFilterSource(e.target.value as typeof filterSource)}
+          className="form-input w-36"
+          title="מי יצר את הכלל"
+        >
+          <option value="all">כל המקורות</option>
+          <option value="user">ידני (משתמש)</option>
+          <option value="llm_confirmed">AI מאושר</option>
+          <option value="pending">ממתין לאישור</option>
+        </select>
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
+          className="form-input w-32"
+        >
+          <option value="all">פעיל + מושבת</option>
+          <option value="active">פעיל בלבד</option>
+          <option value="inactive">מושבת בלבד</option>
+        </select>
+        <select
+          value={filterAccount}
+          onChange={(e) => setFilterAccount(e.target.value)}
+          className="form-input w-40"
+          title="סנן לפי חשבון שהכלל חל עליו"
+        >
+          <option value="">כל החשבונות</option>
+          <option value="__none">בלי הגבלת חשבון</option>
+          {props.accounts.length > 0 && <option disabled>──────────</option>}
+          {props.accounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </select>
+        {activeFilterCount > 0 && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground hover:bg-accent/40"
+            title="נקה את כל הסינונים"
+          >
+            <X className="size-3" /> נקה ({activeFilterCount})
+          </button>
+        )}
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {filtered.length} / {props.rules.length}
+        </span>
         <div className="ms-auto flex items-center gap-2">
           <button
             onClick={handleAiCategorize}
@@ -264,9 +394,12 @@ export function RulesAdminClient(props: {
               {filtered.map((r) => (
                 <tr
                   key={r.id}
+                  id={`rule-row-${r.id}`}
                   className={cn(
-                    'border-b last:border-0 hover:bg-accent/20',
+                    'border-b last:border-0 hover:bg-accent/20 transition-colors',
                     !r.isActive && 'opacity-50',
+                    // Yellow flash when arriving via ?highlight=<id>; clears after 2.5s.
+                    highlightId === r.id && 'bg-amber-100/70 dark:bg-amber-900/30',
                   )}
                 >
                   <td className="px-3 py-3 align-top">

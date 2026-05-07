@@ -25,10 +25,18 @@ export async function GET(req: NextRequest) {
     // ── Transactions ──────────────────────────────────────────────────────────
     db
       .select({
-        id: schema.transactions.id,
-        merchant: schema.transactions.merchantRaw,
-        date: schema.transactions.transactionDate,
-        amount: schema.transactions.amountIls,
+        id:           schema.transactions.id,
+        merchant:     schema.transactions.merchantRaw,
+        date:         schema.transactions.transactionDate,
+        amount:       schema.transactions.amountIls,
+        // Needed by the command palette so it can deep-link to the
+        // correct billing month on /transactions (otherwise the row
+        // wouldn't be visible if today's month doesn't include it).
+        billingMonth: schema.transactions.billingMonth,
+        // Project link — when set, the palette routes the user to the
+        // per-project page (where the row IS visible) instead of
+        // /transactions (which hides project-tagged rows by design).
+        projectId:    schema.transactions.projectId,
       })
       .from(schema.transactions)
       .where(

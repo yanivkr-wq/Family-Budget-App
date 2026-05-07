@@ -3,6 +3,7 @@ import { getDb, schema } from '@fba/db';
 import { and, eq, inArray, isNull, sum } from 'drizzle-orm';
 import { activeBillingMonth } from '@fba/db';
 import { SavingsClient, type GoalRow, type MonthlySavingsData } from './client';
+import { excludeHiddenProjectTxns } from '@/lib/project-filter';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,12 +12,23 @@ export default async function SavingsPage() {
   const householdId = session!.user.householdId;
   const db = getDb();
 
-  // ── goals ────────────────────────────────────────────────────────────────────
-  const rawGoals = await db
-    .select()
-    .from(schema.savingGoals)
-    .where(eq(schema.savingGoals.householdId, householdId))
-    .orderBy(schema.savingGoals.priority, schema.savingGoals.createdAt);
+  // Goals + savings categories are independent — fetch in parallel.
+  const [rawGoals, savingsCategories] = await Promise.all([
+    db
+      .select()
+      .from(schema.savingGoals)
+      .where(eq(schema.savingGoals.householdId, householdId))
+      .orderBy(schema.savingGoals.priority, schema.savingGoals.createdAt),
+    db
+      .select({ id: schema.categories.id, monthlyTargetIls: schema.categories.monthlyTargetIls })
+      .from(schema.categories)
+      .where(
+        and(
+          eq(schema.categories.householdId, householdId),
+          eq(schema.categories.isSavings, true),
+        ),
+      ),
+  ]);
 
   const goals: GoalRow[] = rawGoals.map((g) => ({
     id: g.id,
@@ -34,18 +46,6 @@ export default async function SavingsPage() {
     notes: g.notes,
   }));
 
-  // ── monthly savings stats ────────────────────────────────────────────────────
-  // Find categories flagged as savings categories to show monthly deposit rate
-  const savingsCategories = await db
-    .select({ id: schema.categories.id, monthlyTargetIls: schema.categories.monthlyTargetIls })
-    .from(schema.categories)
-    .where(
-      and(
-        eq(schema.categories.householdId, householdId),
-        eq(schema.categories.isSavings, true),
-      ),
-    );
-
   let monthly: MonthlySavingsData | null = null;
 
   if (savingsCategories.length > 0) {
@@ -62,6 +62,10 @@ export default async function SavingsPage() {
           eq(schema.transactions.isProjected, false),
           isNull(schema.transactions.deletedAt),
           inArray(schema.transactions.categoryId, catIds),
+          // Hide project txns even if they happen to be tagged with a
+          // savings category — savings tracking is about household
+          // discretionary deposits, not one-off project transfers.
+          excludeHiddenProjectTxns(),
         ),
       );
 

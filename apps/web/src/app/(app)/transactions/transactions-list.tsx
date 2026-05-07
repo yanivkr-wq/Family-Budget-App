@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useTransition, useMemo } from 'react';
+import { useEffect, useState, useTransition, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { formatIls } from '@fba/shared';
-import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2, Repeat } from 'lucide-react';
+import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2, Repeat, Briefcase } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { RuleModal } from './rule-modal';
 import { EditTransactionModal } from './edit-modal';
@@ -11,6 +12,7 @@ import { InstallmentModal, type InstallmentPrefill } from '../installments/insta
 import { TransactionsFilter, emptyFilter, isFilterActive, type FilterState } from './transactions-filter';
 import { bulkDeleteTransactions, bulkApplyRule, bulkSetCategory } from './rule-actions';
 import { deleteTransaction } from './actions';
+import { AssignToProjectMenu, type ProjectOption } from './assign-to-project-menu';
 import {
   ColumnsCustomizer,
   ColumnResizeHandle,
@@ -68,6 +70,21 @@ interface Transaction {
    *  Renders with reduced opacity + a "צפוי" badge so the user can tell
    *  it apart from real charges. */
   isProjected?: boolean;
+  /** Project this transaction belongs to (e.g., "construction"). When
+   *  set, the per-row briefcase button shows the active project name and
+   *  offers a "remove tag" action. Rows with project tags are usually
+   *  hidden from this view via the server-side excludeFromMonthlyTotals
+   *  filter, but they may still appear if the project opted into monthly
+   *  totals. */
+  projectId?: string | null;
+  /** Cross-account transfer flag — when true, excluded from combined-view
+   *  income/expense totals. Surfaced to the edit modal so the toggle
+   *  reflects the saved state. */
+  isTransfer?: boolean;
+  /** Per-row override that brings a project-tagged row back into monthly
+   *  totals (capex/opex split). Surfaced to the edit modal so the toggle
+   *  reflects the saved state and so we can show a "📅 גם חודשי" badge. */
+  includeInMonthlyOverride?: boolean;
 }
 
 function sumExpenses(txns: Transaction[]) {
@@ -98,6 +115,9 @@ export function TransactionsList(props: {
   subCategories: SubCat[];
   accounts: Account[];
   rules: Rule[];
+  /** Active + paused projects for the per-row "assign to project" button +
+   *  the bulk-action assign menu. Empty array hides the project UI. */
+  projects: ProjectOption[];
   billingMonth: string;        // calendar month, e.g. "2026-05"
   cycleChargeDate: string;     // current cycle charge date, e.g. "2026-05-10"
   nextCycleChargeDate: string; // next cycle charge date, e.g. "2026-06-10"
@@ -106,6 +126,32 @@ export function TransactionsList(props: {
   const [selected, setSelected]         = useState<Set<string>>(new Set());
   const [ruleModalForId, setRuleModalForId] = useState<string | null>(null);
   const [editTxnId, setEditTxnId]       = useState<string | null>(null);
+  // Project assignment popover state. `targetIds` = which transactions
+  // the menu acts on (single row or current bulk selection).
+  // `triggerRect` is the bounding rect of the button that opened it —
+  // the menu uses this to position itself with viewport-edge clamping.
+  const [projectMenu, setProjectMenu] = useState<{
+    targetIds:   string[];
+    triggerRect: DOMRect;
+  } | null>(null);
+
+  // Deep-link support: ?highlight=<txnId> (used by the global command
+  // palette) scrolls the matched row into view + flashes it amber so the
+  // user can spot it. Clears after 3 seconds.
+  const searchParams = useSearchParams();
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  useEffect(() => {
+    const hl = searchParams.get('highlight');
+    if (!hl) return;
+    setHighlightId(hl);
+    // Wait one frame so the row has actually rendered before scrolling.
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`txn-row-${hl}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    const t = setTimeout(() => setHighlightId(null), 3000);
+    return () => clearTimeout(t);
+  }, [searchParams]);
   // Per-row "mark as ..." quick actions: open a pre-filled create modal
   // for either /recurring or /installments using the transaction's data
   // (merchant name, amount, account). Saves the user from navigating
@@ -239,6 +285,26 @@ export function TransactionsList(props: {
           <button onClick={bulkDelete} disabled={isPending} className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-40">
             <Trash2 className="size-3.5" />מחק
           </button>
+          {/* Bulk assign-to-project — opens the project menu anchored to
+              the trigger button, acts on every selected row. The menu's
+              "remove tag" footer appears whenever ≥1 of the selected
+              rows currently has a project tag. */}
+          {props.projects.length > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                setProjectMenu({
+                  targetIds:   Array.from(selected),
+                  triggerRect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                });
+              }}
+              disabled={isPending}
+              className="inline-flex items-center gap-1 rounded-md bg-accent/30 px-2 py-1 text-xs font-medium text-foreground hover:bg-accent/50 disabled:opacity-40"
+              title="תייג את הנבחרים לפרויקט"
+            >
+              <Briefcase className="size-3.5" />תייג לפרויקט
+            </button>
+          )}
           <button onClick={() => setSelected(new Set())} className="ms-auto text-xs text-muted-foreground hover:underline">ביטול בחירה</button>
         </div>
       )}
@@ -412,6 +478,7 @@ export function TransactionsList(props: {
                   return (
                     <tr
                       key={t.id}
+                      id={`txn-row-${t.id}`}
                       className={cn(
                         'border-b last:border-0 transition-colors hover:bg-accent/30',
                         isSelected && 'bg-primary-soft/40',
@@ -424,6 +491,9 @@ export function TransactionsList(props: {
                         // dashed background so they're clearly distinguishable
                         // from real charges.
                         t.isProjected && 'opacity-60 italic bg-muted/20',
+                        // Amber flash when arriving via ?highlight=<id> from
+                        // the global command palette. Clears after 3 seconds.
+                        highlightId === t.id && '!bg-amber-100 dark:!bg-amber-900/40 ring-2 ring-amber-400',
                       )}
                     >
                       {/* Selection checkbox (always-on bookend) — vertically
@@ -499,6 +569,33 @@ export function TransactionsList(props: {
                               aria-label="סמן כתשלום"
                             >
                               <CreditCard className="size-3.5" />
+                            </button>
+                          )}
+                          {/* Assign to project — anchors a floating menu
+                              listing all active/paused projects + a
+                              "remove tag" footer when the row already
+                              has a tag. Tinted active when the row is
+                              currently tagged so the user can spot
+                              project-tagged rows at a glance. */}
+                          {props.projects.length > 0 && !t.isProjected && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                setProjectMenu({
+                                  targetIds:   [t.id],
+                                  triggerRect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                                });
+                              }}
+                              className={cn(
+                                'rounded-md p-1.5 hover:bg-accent/40',
+                                t.projectId
+                                  ? 'text-primary bg-primary-soft'
+                                  : 'text-foreground/60 hover:text-foreground',
+                              )}
+                              title={t.projectId ? 'משויך לפרויקט — לחץ לשינוי' : 'תייג לפרויקט'}
+                              aria-label="תייג לפרויקט"
+                            >
+                              <Briefcase className="size-3.5" />
                             </button>
                           )}
                           <button type="button" onClick={() => deleteOne(t.id)} disabled={isPending} className="rounded-md p-1.5 text-destructive hover:bg-destructive/10" title="מחק">
@@ -708,6 +805,27 @@ export function TransactionsList(props: {
           onSetOrder={setColOrder}
           onSetVisible={setColVisible}
           onReset={resetCols}
+        />
+      )}
+
+      {/* Floating project-assignment menu — opened by per-row briefcase
+          button or the bulk-action "תייג לפרויקט" button. The menu owns
+          its own outside-click + Esc close behaviour. After a successful
+          assignment it clears bulk selection if it was a bulk action. */}
+      {projectMenu && (
+        <AssignToProjectMenu
+          projects={props.projects}
+          transactionIds={projectMenu.targetIds}
+          showRemove={projectMenu.targetIds.some(
+            (id) => !!props.transactions.find((t) => t.id === id)?.projectId,
+          )}
+          triggerRect={projectMenu.triggerRect}
+          onClose={() => setProjectMenu(null)}
+          onDone={() => {
+            // If this was a bulk action, clear the selection so the user
+            // gets visual confirmation that the action consumed it.
+            if (projectMenu.targetIds.length > 1) setSelected(new Set());
+          }}
         />
       )}
     </>

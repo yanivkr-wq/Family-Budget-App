@@ -1807,18 +1807,40 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   // suffix to the 2nd / 3rd / ... occurrence. Idempotent across re-imports
   // because the source order is stable AND we only suffix WITHIN the
   // duplicate group, leaving the first occurrence untouched.
+  //
+  // EXCEPTION — installment-linked rows: some bank exports list every
+  // payment of an installment plan as a separate identical row on the
+  // day the plan was opened (instead of distributing each across its
+  // future month). Suffixing creates N duplicate "payment 1/N" rows
+  // that pollute the cycle and mislead the user. Instead, DROP the
+  // duplicates here — the installment_plan handles the missing
+  // payments via the synthesized "צפוי" projection rows.
   // ───────────────────────────────────────────────────────────────────────
   const seenSeq = new Map<string, number>();
-  for (const row of inserts) {
+  const droppedInstallmentDups: number[] = [];
+  for (let i = 0; i < inserts.length; i++) {
+    const row = inserts[i]!;
     const base = row.externalId as string;
     const n = (seenSeq.get(base) ?? 0) + 1;
     seenSeq.set(base, n);
     if (n > 1) {
-      // Suffix into the same 24-char fingerprint slot so the unique index
-      // still holds. We hash the (base, n) pair so the result stays a
-      // 24-char hex string and doesn't widen the column.
-      row.externalId = createHash('sha1').update(`${base}#${n}`).digest('hex').slice(0, 24);
+      if ((row as { installmentPlanId?: string | null }).installmentPlanId) {
+        // Drop the duplicate — same plan/date/amount/merchant means the
+        // bank file double-listed the same payment; we keep the first.
+        droppedInstallmentDups.push(i);
+      } else {
+        // Not an installment — these ARE legitimate (two coffees, etc.)
+        // Suffix into the same 24-char slot to keep the unique-index happy.
+        row.externalId = createHash('sha1').update(`${base}#${n}`).digest('hex').slice(0, 24);
+      }
     }
+  }
+  // Remove from highest index to lowest so the indices stay valid.
+  for (let i = droppedInstallmentDups.length - 1; i >= 0; i--) {
+    inserts.splice(droppedInstallmentDups[i]!, 1);
+  }
+  if (droppedInstallmentDups.length > 0) {
+    console.log(`[import] dropped ${droppedInstallmentDups.length} duplicate installment row(s) (bank double-listed the same payment)`);
   }
 
   // ── Insert with ON CONFLICT DO UPDATE. Only fills NULL fields (via

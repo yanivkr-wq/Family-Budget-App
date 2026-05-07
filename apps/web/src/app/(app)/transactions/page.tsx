@@ -11,6 +11,7 @@ import { autoComputeChargeDate } from '@/lib/charge-date';
 import { Clock, CheckCircle2, CalendarClock } from 'lucide-react';
 import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
 import { readActiveView } from '@/components/view-tabs-server';
+import { excludeHiddenProjectTxns } from '@/lib/project-filter';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,7 @@ export default async function TransactionsPage(props: {
   const db = getDb();
 
   // Load lookup data for the form. We pull `purpose` so we can filter by view.
-  const [allAccountsRaw, categories, rules] = await Promise.all([
+  const [allAccountsRaw, categories, rules, projects] = await Promise.all([
     db
       .select({ id: schema.accounts.id, name: schema.accounts.name, type: schema.accounts.type, purpose: schema.accounts.purpose })
       .from(schema.accounts)
@@ -65,6 +66,23 @@ export default async function TransactionsPage(props: {
         ),
       )
       .orderBy(schema.categoryRules.priority),
+    // Active + paused projects for the per-row "assign to project" menu.
+    // We omit completed/cancelled to keep the menu short — those projects
+    // can still be reached from /projects to retag manually if needed.
+    db
+      .select({
+        id:    schema.projects.id,
+        name:  schema.projects.name,
+        color: schema.projects.color,
+      })
+      .from(schema.projects)
+      .where(
+        and(
+          eq(schema.projects.householdId, householdId),
+          // status filter happens client-side; we want both active+paused
+        ),
+      )
+      .orderBy(schema.projects.createdAt),
   ]);
 
   const topCats = categories.filter((c) => !c.parentId).sort((a, b) => a.sortOrder - b.sortOrder);
@@ -95,7 +113,9 @@ export default async function TransactionsPage(props: {
    *   1. All transactions DATED in this month (includes days 11+ which bill next cycle)
    *   2. Carry-over: transactions billed TO this month but dated in a prior month
    */
-  const txns = await db
+  // Defined as a thenable here, awaited together with `activePlans` below
+  // (the two reads are independent → run in parallel instead of serial).
+  const txnsQuery = db
     .select({
       id: schema.transactions.id,
       date: schema.transactions.transactionDate,
@@ -140,6 +160,20 @@ export default async function TransactionsPage(props: {
       // trace any imported row back to the upload that produced it.
       importFilename:  schema.importSessions.filename,
       importCreatedAt: schema.importSessions.committedAt,
+      // Project tag (e.g. "construction") — when set AND the project has
+      // excludeFromMonthlyTotals=true, the row was already filtered out
+      // by the where-clause; we keep the column anyway to power the
+      // per-row "assign/remove project" button + the project pill in
+      // the merchant cell.
+      projectId: schema.transactions.projectId,
+      // Cross-account transfer flag. Passed through so the edit modal
+      // reflects the correct toggle state (was previously omitted, so
+      // toggling "isTransfer" off→on→off in the same session lost state).
+      isTransfer: schema.transactions.isTransfer,
+      // Per-row "include in monthly" override (capex/opex split for project
+      // transactions). When true, project rows are kept in monthly views
+      // even though their project is excluded.
+      includeInMonthlyOverride: schema.transactions.includeInMonthlyOverride,
     })
     .from(schema.transactions)
     .leftJoin(
@@ -167,6 +201,10 @@ export default async function TransactionsPage(props: {
         eq(schema.transactions.householdId, householdId),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
+        // Hide transactions tagged to a project with excludeFromMonthlyTotals=true.
+        // Those live on /projects/[id] only; mixing them into the regular monthly
+        // view would drown out everyday spending with one-off ₪200K transfers.
+        excludeHiddenProjectTxns(),
         // View-tab filter — limit to the accounts visible in the current
         // view (personal / business / combined).
         accountFilter !== null
@@ -202,7 +240,7 @@ export default async function TransactionsPage(props: {
   // for that plan in that month, add a projected row (isProjected=true).
   // The list renders these with a "צפוי" badge + reduced opacity so the
   // user can tell them apart from real charges.
-  const activePlans = await db
+  const activePlansQuery = db
     .select({
       id: schema.installmentPlans.id,
       accountId: schema.installmentPlans.accountId,
@@ -222,6 +260,9 @@ export default async function TransactionsPage(props: {
         ? inArray(schema.installmentPlans.accountId, accountFilter)
         : undefined,
     ));
+
+  // Resolve both reads concurrently.
+  const [txns, activePlans] = await Promise.all([txnsQuery, activePlansQuery]);
 
   // Look up the most-recent real transaction per plan so the projected
   // row can inherit its category (one less unknown for the user).
@@ -285,6 +326,9 @@ export default async function TransactionsPage(props: {
         transferPairId:   null,
         importFilename:   null,
         importCreatedAt:  null,
+        projectId:        null,
+        isTransfer:       false,
+        includeInMonthlyOverride: false,
       });
     }
   }
@@ -517,11 +561,15 @@ export default async function TransactionsPage(props: {
           // True for the synthesized projection rows; identifies them in
           // the list so we can render with reduced opacity + "צפוי" badge.
           isProjected:      String(t.id).startsWith('projected-'),
+          projectId:        t.projectId,
+          isTransfer:       t.isTransfer,
+          includeInMonthlyOverride: t.includeInMonthlyOverride,
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}
         accounts={accounts.map((a) => ({ id: a.id, name: a.name, type: a.type }))}
         rules={rules.map((r) => ({ id: r.id, label: r.name ?? r.pattern, categoryId: r.categoryId }))}
+        projects={projects}
         billingMonth={month}
         cycleChargeDate={cycleChargeDate}
         nextCycleChargeDate={nextCycleChargeDate}

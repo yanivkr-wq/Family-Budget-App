@@ -15,7 +15,7 @@ import { formatIls } from '@fba/shared';
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface SearchResults {
-  transactions: Array<{ id: string; merchant: string; date: string; amount: string }>;
+  transactions: Array<{ id: string; merchant: string; date: string; amount: string; billingMonth: string; projectId: string | null }>;
   accounts: Array<{ id: string; name: string; institution: string; type: string }>;
   categories: Array<{ id: string; nameHe: string; parentId: string | null }>;
   rules: Array<{ id: string; name: string | null; pattern: string }>;
@@ -117,12 +117,23 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               n.label.toLowerCase().includes(q) || n.href.toLowerCase().includes(q),
           );
 
-    // DB results → CommandItems (only when there's a query)
+    // DB results → CommandItems (only when there's a query). All deep-link
+    // to the relevant page with a `?highlight=<id>` query param so the
+    // destination page can scroll-into-view + flash the matched row.
+    // Transactions also include `?month=<billingMonth>` so the row falls
+    // inside the visible window — without it the user lands on the current
+    // month and the row they searched for is invisible.
     const txnItems: CommandItem[] = (results?.transactions ?? []).map((t) => ({
       id: `txn-${t.id}`,
       label: t.merchant,
-      sublabel: `${t.date} · ${formatIls(Number(t.amount))}`,
-      href: '/transactions',
+      // Mark project-linked rows so the user knows where they're going.
+      sublabel: `${t.date} · ${formatIls(Number(t.amount))}${t.projectId ? ' · 📦 פרויקט' : ''}`,
+      // Project transactions are hidden from /transactions by design —
+      // route them to the per-project page where they ARE visible.
+      // Regular transactions go to /transactions with month + highlight.
+      href: t.projectId
+        ? `/projects/${t.projectId}?highlight=${t.id}`
+        : `/transactions?month=${t.billingMonth}&highlight=${t.id}`,
       icon: FileText,
       group: 'transactions',
     }));
@@ -131,7 +142,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       id: `acc-${a.id}`,
       label: a.name,
       sublabel: a.institution,
-      href: '/admin/accounts',
+      href: `/admin/accounts?highlight=${a.id}`,
       icon: Landmark,
       group: 'accounts',
     }));
@@ -140,7 +151,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       id: `cat-${c.id}`,
       label: c.nameHe,
       sublabel: c.parentId ? 'תת-קטגוריה' : 'קטגוריה',
-      href: '/admin/categories',
+      href: `/admin/categories?highlight=${c.id}`,
       icon: Tag,
       group: 'categories',
     }));
@@ -149,7 +160,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       id: `rule-${r.id}`,
       label: r.name ?? r.pattern,
       sublabel: r.name ? r.pattern : undefined,
-      href: '/admin/rules',
+      href: `/admin/rules?highlight=${r.id}`,
       icon: Zap,
       group: 'rules',
     }));

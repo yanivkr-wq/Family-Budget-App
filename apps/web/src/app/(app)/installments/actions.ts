@@ -238,7 +238,12 @@ export async function advancePayment(id: string): Promise<{ ok: boolean; error?:
     if (!plan) return { ok: false, error: 'תוכנית לא נמצאה' };
 
     const newNo = plan.currentPaymentNo + 1;
-    const isComplete = plan.totalPayments !== null && newNo > plan.totalPayments;
+    // currentPaymentNo represents payments paid so far. When newNo equals
+    // totalPayments we've just recorded the LAST payment → plan is complete.
+    // (Earlier this used `>` which only triggered if the user advanced past
+    // the total — but the UI's advance button is hidden once current ===
+    // total, so the auto-complete never fired and plans got stuck "active".)
+    const isComplete = plan.totalPayments !== null && newNo >= plan.totalPayments;
 
     await db
       .update(schema.installmentPlans)

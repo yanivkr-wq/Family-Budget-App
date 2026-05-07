@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth';
 import { getDb, schema, activeBillingMonth, billingCycleRange } from '@fba/db';
 import { and, eq, isNull } from 'drizzle-orm';
 import { formatIls, formatMonthHe, formatShortDateHe, he } from '@fba/shared';
+import { excludeHiddenProjectTxns } from '@/lib/project-filter';
 
 // Day-by-day × category grid.
 // Rows = every date in the billing cycle (cycle-start to cycle-end), not calendar days.
@@ -40,27 +41,32 @@ export default async function GridPage(props: {
     }
   }
 
-  const txns = await db
-    .select({
-      id: schema.transactions.id,
-      date: schema.transactions.transactionDate,
-      amount: schema.transactions.amountIls,
-      categoryId: schema.transactions.categoryId,
-    })
-    .from(schema.transactions)
-    .where(
-      and(
-        eq(schema.transactions.householdId, householdId),
-        eq(schema.transactions.billingMonth, month),
-        isNull(schema.transactions.deletedAt),
-        eq(schema.transactions.isProjected, false),
+  // Both reads are independent → run in parallel instead of serially.
+  const [txns, cats] = await Promise.all([
+    db
+      .select({
+        id: schema.transactions.id,
+        date: schema.transactions.transactionDate,
+        amount: schema.transactions.amountIls,
+        categoryId: schema.transactions.categoryId,
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.householdId, householdId),
+          eq(schema.transactions.billingMonth, month),
+          isNull(schema.transactions.deletedAt),
+          eq(schema.transactions.isProjected, false),
+          // Hide project-tagged txns (multi-year construction etc.) from
+          // the day-by-day grid — they live on /projects/[id] only.
+          excludeHiddenProjectTxns(),
+        ),
       ),
-    );
-
-  const cats = await db
-    .select()
-    .from(schema.categories)
-    .where(eq(schema.categories.householdId, householdId));
+    db
+      .select()
+      .from(schema.categories)
+      .where(eq(schema.categories.householdId, householdId)),
+  ]);
   const topCats = cats
     .filter((c) => !c.parentId && !c.isIncome)
     .sort((a, b) => a.sortOrder - b.sortOrder);

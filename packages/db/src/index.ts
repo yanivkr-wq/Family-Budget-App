@@ -5,3 +5,4 @@ export * from './types';
 export * from './helpers/encryption';
 export * from './helpers/billing-month';
 export * from './helpers/merchant';
+export * from './helpers/project-filter';

@@ -11,39 +11,41 @@ export default async function AccountsAdminPage() {
   const householdId = session!.user.householdId;
   const db = getDb();
 
-  const accounts = await db
-    .select({
-      id: schema.accounts.id,
-      name: schema.accounts.name,
-      type: schema.accounts.type,
-      purpose: schema.accounts.purpose,
-      institution: schema.accounts.institution,
-      accountNumberMasked: schema.accounts.accountNumberMasked,
-      externalKey: schema.accounts.externalKey,
-      paymentSchedule: schema.accounts.paymentSchedule,
-      cutoffDay: schema.accounts.cutoffDay,
-      chargeDay: schema.accounts.chargeDay,
-      isActive: schema.accounts.isActive,
-      currency: schema.accounts.currency,
-    })
-    .from(schema.accounts)
-    .where(eq(schema.accounts.householdId, householdId))
-    .orderBy(schema.accounts.name);
-
-  const txnStats = await db
-    .select({
-      accountId: schema.transactions.accountId,
-      txnCount: count(schema.transactions.id),
-      txnTotal: sql<string>`coalesce(sum(${schema.transactions.amountIls}), 0)`,
-    })
-    .from(schema.transactions)
-    .where(
-      and(
-        eq(schema.transactions.householdId, householdId),
-        eq(schema.transactions.isProjected, false),
-      ),
-    )
-    .groupBy(schema.transactions.accountId);
+  // Both reads are independent → parallelize.
+  const [accounts, txnStats] = await Promise.all([
+    db
+      .select({
+        id: schema.accounts.id,
+        name: schema.accounts.name,
+        type: schema.accounts.type,
+        purpose: schema.accounts.purpose,
+        institution: schema.accounts.institution,
+        accountNumberMasked: schema.accounts.accountNumberMasked,
+        externalKey: schema.accounts.externalKey,
+        paymentSchedule: schema.accounts.paymentSchedule,
+        cutoffDay: schema.accounts.cutoffDay,
+        chargeDay: schema.accounts.chargeDay,
+        isActive: schema.accounts.isActive,
+        currency: schema.accounts.currency,
+      })
+      .from(schema.accounts)
+      .where(eq(schema.accounts.householdId, householdId))
+      .orderBy(schema.accounts.name),
+    db
+      .select({
+        accountId: schema.transactions.accountId,
+        txnCount: count(schema.transactions.id),
+        txnTotal: sql<string>`coalesce(sum(${schema.transactions.amountIls}), 0)`,
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.householdId, householdId),
+          eq(schema.transactions.isProjected, false),
+        ),
+      )
+      .groupBy(schema.transactions.accountId),
+  ]);
   const statsById = new Map(txnStats.map((s) => [s.accountId, s]));
 
   const rows: AccountRow[] = accounts.map((a) => {

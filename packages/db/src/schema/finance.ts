@@ -252,6 +252,16 @@ export const transactions = pgTable(
      */
     projectId: uuid().references((): any => projects.id, { onDelete: 'set null' }),
     /**
+     * Per-transaction override for the project's excludeFromMonthlyTotals flag.
+     * When true, this row is INCLUDED in monthly summaries even though its project
+     * normally hides them. Models the capex / opex split: a ₪200K transfer to the
+     * contractor is pure capex (project-only), but a ₪400 lamp purchase that's
+     * also part of the build IS part of regular spending → check this flag for
+     * the lamp, leave it false for the contractor transfer.
+     * Has no effect when projectId is NULL.
+     */
+    includeInMonthlyOverride: boolean().notNull().default(false),
+    /**
      * The import session that created this transaction. When the user reverts a session,
      * we soft-delete every transaction with this import_session_id in one query.
      */

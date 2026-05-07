@@ -4,6 +4,7 @@ import {
   schema,
   addMonths,
   currentBillingMonth,
+  excludeHiddenProjectTxns,
 } from '@fba/db';
 import {
   queryTransactionsArgs,
@@ -41,6 +42,10 @@ export async function queryTransactions(ctx: ToolContext, rawArgs: unknown) {
     eq(schema.transactions.householdId, householdId),
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, false),
+    // Exclude txns tagged to a project hidden from monthly totals so the
+    // chatbot doesn't surprise the user with a ₪200K construction
+    // payment when they ask "what was my biggest expense this month?".
+    excludeHiddenProjectTxns(),
   ];
 
   if (args.date_from) whereParts.push(gte(schema.transactions.transactionDate, args.date_from));
@@ -138,6 +143,7 @@ export async function getCategorySummary(ctx: ToolContext, rawArgs: unknown) {
         eq(schema.transactions.billingMonth, args.month),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
+        excludeHiddenProjectTxns(),
       ),
     )
     .groupBy(idCol);
@@ -426,6 +432,7 @@ export async function searchMerchants(ctx: ToolContext, rawArgs: unknown) {
         ilike(schema.transactions.merchantNormalized, `%${args.query.toLowerCase()}%`),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
+        excludeHiddenProjectTxns(),
       ),
     )
     .groupBy(schema.transactions.merchantNormalized)

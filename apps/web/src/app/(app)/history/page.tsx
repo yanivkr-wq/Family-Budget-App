@@ -6,6 +6,7 @@ import { formatIls, formatMonthHe } from '@fba/shared';
 import Link from 'next/link';
 import { TrendingDown, TrendingUp, Calendar } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { excludeHiddenProjectTxns } from '@/lib/project-filter';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +37,9 @@ export default async function HistoryPage() {
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
+        // Hide project-tagged txns so a multi-month construction project
+        // doesn't make every month look like a cash-flow disaster.
+        excludeHiddenProjectTxns(),
       ),
     )
     .groupBy(schema.transactions.billingMonth, schema.categories.isIncome);

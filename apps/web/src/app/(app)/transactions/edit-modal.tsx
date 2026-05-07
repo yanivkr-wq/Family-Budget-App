@@ -27,6 +27,16 @@ interface Transaction {
   subCategoryId: string | null;
   accountId: string;
   notes: string | null;
+  /** Cross-account transfer flag. When true, the row is excluded from
+   *  combined-view income/expense totals (no double counting). */
+  isTransfer?: boolean;
+  /** Per-row override that brings a project-tagged row back into the
+   *  monthly cash flow (capex/opex split). Only meaningful when
+   *  projectId is set. */
+  includeInMonthlyOverride?: boolean;
+  /** Project this row belongs to (passed in just so the modal can decide
+   *  whether to surface the override checkbox). null = no project. */
+  projectId?: string | null;
 }
 
 export function EditTransactionModal(props: {
@@ -52,6 +62,8 @@ export function EditTransactionModal(props: {
   const [categoryId, setCategoryId] = useState<string | ''>(t.categoryId ?? '');
   const [subCategoryId, setSubCategoryId] = useState<string | ''>(t.subCategoryId ?? '');
   const [notes, setNotes] = useState(t.notes ?? '');
+  const [isTransfer, setIsTransfer] = useState(!!t.isTransfer);
+  const [includeInMonthlyOverride, setIncludeInMonthlyOverride] = useState(!!t.includeInMonthlyOverride);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -80,6 +92,8 @@ export function EditTransactionModal(props: {
         categoryId: categoryId || null,
         subCategoryId: subCategoryId || null,
         notes: notes.trim() || null,
+        isTransfer,
+        includeInMonthlyOverride,
       });
       if (!result.ok) {
         setError(result.error ?? 'שגיאה לא ידועה');
@@ -226,6 +240,57 @@ export function EditTransactionModal(props: {
               className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
             />
           </Field>
+
+          {/* Transfer toggle — full width below the standard fields. When
+              checked, the row is excluded from combined-view income/expense
+              totals so cross-account moves between the user's own accounts
+              don't get double-counted (e.g. salary deposit from business
+              → personal would otherwise show as income in BOTH sides). */}
+          <label className="col-span-2 flex items-start gap-2 rounded-md border bg-muted/20 p-2.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isTransfer}
+              onChange={(e) => setIsTransfer(e.target.checked)}
+              className="mt-0.5"
+            />
+            <div className="flex-1">
+              <p className="font-medium text-foreground">זוהי העברה בין חשבונות</p>
+              <p className="mt-0.5 text-muted-foreground">
+                סמן כשהתנועה מייצגת תזוזת כסף בין שני חשבונות שלך (למשל הפקדה
+                מבנק עסקי לבנק פרטי, משיכה מחיסכון). תנועות מסומנות יוסטרו
+                מסכומי הכנסה/הוצאה בתצוגת &ldquo;משולב&rdquo; כדי למנוע ספירה כפולה.
+              </p>
+            </div>
+          </label>
+
+          {/* Per-row "include in monthly" override — only shown when the
+              row is tagged to a project. Lets the user split capex (full
+              project transfers; stay hidden from monthly) from opex (small
+              project-related purchases that should also affect this
+              month's discretionary budget). */}
+          {t.projectId && (
+            <label className="col-span-2 flex items-start gap-2 rounded-md border border-amber-300/40 bg-amber-50/40 p-2.5 text-xs cursor-pointer dark:border-amber-700/40 dark:bg-amber-900/10">
+              <input
+                type="checkbox"
+                checked={includeInMonthlyOverride}
+                onChange={(e) => setIncludeInMonthlyOverride(e.target.checked)}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <p className="font-medium text-foreground">
+                  📦 כלול גם בסיכומים החודשיים
+                </p>
+                <p className="mt-0.5 text-muted-foreground">
+                  התנועה מתויגת לפרויקט שמוסתר מהתצוגות החודשיות. סמן כדי
+                  שהתנועה <strong>תופיע גם בלוח המחוונים, בדף התנועות ובסיכומים החודשיים</strong> —
+                  בנוסף לדף הפרויקט. שימושי לרכישות שהן גם חלק מהפרויקט וגם
+                  הוצאה שוטפת רגילה (לדוגמה — מנורה לבית בבנייה: ₪400 שצריך
+                  לראות גם בתקציב החודשי, להבדיל מהעברה של ₪200,000 לקבלן
+                  שזה רק capex של הפרויקט).
+                </p>
+              </div>
+            </label>
+          )}
         </div>
 
         <footer className="mt-4 flex items-center justify-end gap-2 border-t pt-3">

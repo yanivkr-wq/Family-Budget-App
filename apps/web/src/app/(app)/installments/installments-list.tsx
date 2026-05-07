@@ -50,14 +50,32 @@ function StatusBadge({ status }: { status: string }) {
 // Progress bar
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Progress bar for an installment plan.
+ *
+ * Semantics: `current` = number of payments PROCESSED so far. `total` =
+ * full count. So 1 of 4 paid → 25%, 4 of 4 paid → 100%. (Earlier this
+ * used `(current - 1) / total` which produced 0% for "1 of 4" — that's
+ * what the user reported as "not displayed properly".)
+ *
+ * The fill respects `min-width: 4px` even at low percentages so a "1 of
+ * 12" plan still shows a tiny visible nub instead of an empty track. Tone
+ * shifts from primary → success at 100% so completion is visually obvious.
+ */
 function ProgressBar({ current, total }: { current: number; total: number }) {
-  const pct = Math.min(100, Math.round(((current - 1) / total) * 100));
+  const safeTotal = Math.max(1, total);
+  const safeCurrent = Math.max(0, Math.min(current, safeTotal));
+  const pct = Math.round((safeCurrent / safeTotal) * 100);
+  const isComplete = safeCurrent >= safeTotal;
   return (
     <div className="flex items-center gap-2 min-w-[6rem]">
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full bg-primary transition-all"
-          style={{ width: `${pct}%` }}
+          className={cn(
+            'h-full rounded-full transition-all',
+            isComplete ? 'bg-success' : 'bg-primary',
+          )}
+          style={{ width: `${pct}%`, minWidth: pct > 0 ? '4px' : '0' }}
         />
       </div>
       <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
@@ -110,8 +128,9 @@ export function InstallmentsList({ plans: initialPlans, accounts }: Props) {
       else if (sortKey === 'status')    cmp = (a.status ?? '').localeCompare(b.status ?? '');
       else if (sortKey === 'endMonth')  cmp = (a.projectedEndMonth ?? '9999').localeCompare(b.projectedEndMonth ?? '9999');
       else if (sortKey === 'remaining') {
-        const remA = a.totalPayments ? a.totalPayments - a.currentPaymentNo + 1 : 999;
-        const remB = b.totalPayments ? b.totalPayments - b.currentPaymentNo + 1 : 999;
+        // currentPaymentNo = payments paid so far. Remaining = total - current.
+        const remA = a.totalPayments ? Math.max(0, a.totalPayments - a.currentPaymentNo) : 999;
+        const remB = b.totalPayments ? Math.max(0, b.totalPayments - b.currentPaymentNo) : 999;
         cmp = remA - remB;
       }
       return sortAsc ? cmp : -cmp;
@@ -162,9 +181,18 @@ export function InstallmentsList({ plans: initialPlans, accounts }: Props) {
   }
 
   // ── Advance payment ───────────────────────────────────────────────────────
+  // current = payments paid so far. total = full count. We can still
+  // advance when current < total (one more payment to mark). When
+  // current === total the plan is already fully paid; the button is
+  // hidden upstream so this guard is just defensive.
   function handleAdvance(id: string, current: number, total: number | null) {
     if (total && current >= total) return;
-    if (!confirm(`לסמן תשלום ${current + 1} כבוצע?`)) return;
+    const next = current + 1;
+    const isFinal = total !== null && next >= total;
+    const msg = isFinal
+      ? `לסמן את התשלום האחרון (${next}/${total}) כבוצע? התוכנית תיסגר אוטומטית.`
+      : `לסמן תשלום ${next}${total ? `/${total}` : ''} כבוצע?`;
+    if (!confirm(msg)) return;
     startTransition(async () => { await advancePayment(id); });
   }
 
@@ -310,8 +338,12 @@ export function InstallmentsList({ plans: initialPlans, accounts }: Props) {
             </thead>
             <tbody>
               {visible.map((p) => {
+                // currentPaymentNo represents how many payments have been
+                // PROCESSED so far. Remaining = total - current. The old
+                // code added "+1", treating current as the next-to-pay,
+                // which double-counted the in-progress payment.
                 const remaining = p.totalPayments
-                  ? Math.max(0, p.totalPayments - p.currentPaymentNo + 1)
+                  ? Math.max(0, p.totalPayments - p.currentPaymentNo)
                   : null;
                 const totalLeft = remaining !== null
                   ? remaining * Math.abs(Number(p.paymentAmountIls))
@@ -364,14 +396,18 @@ export function InstallmentsList({ plans: initialPlans, accounts }: Props) {
                     {/* Remaining */}
                     <td className="px-3 py-3 align-middle">
                       {totalLeft !== null ? (
-                        <div>
-                          <div className="tabular-nums font-medium text-xs">
-                            {formatIls(totalLeft, { decimals: false })}
+                        remaining === 0 ? (
+                          <span className="text-success text-xs font-medium">הושלם</span>
+                        ) : (
+                          <div>
+                            <div className="tabular-nums font-medium text-xs">
+                              {formatIls(totalLeft, { decimals: false })}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {remaining === 1 ? 'תשלום אחרון' : `${remaining} תשלומים`}
+                            </div>
                           </div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {remaining} תשלומים
-                          </div>
-                        </div>
+                        )
                       ) : (
                         <span className="text-muted-foreground text-xs">—</span>
                       )}

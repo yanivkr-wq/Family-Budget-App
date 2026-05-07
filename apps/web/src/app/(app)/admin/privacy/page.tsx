@@ -12,38 +12,39 @@ export default async function PrivacyLedgerPage() {
   const householdId = session!.user.householdId;
   const db = getDb();
 
-  // Categorization log
-  const catLogs = await db
-    .select()
-    .from(schema.categorizationLog)
-    .where(eq(schema.categorizationLog.householdId, householdId))
-    .orderBy(desc(schema.categorizationLog.createdAt))
-    .limit(100);
-
-  // Chat tool-call log — join via chat_message → chat_session for household scoping
-  const chatLogs = await db
-    .select({
-      id: schema.chatToolCallLog.id,
-      toolName: schema.chatToolCallLog.toolName,
-      argsJson: schema.chatToolCallLog.argsJson,
-      rowsReturned: schema.chatToolCallLog.rowsReturned,
-      durationMs: schema.chatToolCallLog.durationMs,
-      error: schema.chatToolCallLog.error,
-      createdAt: schema.chatToolCallLog.createdAt,
-      sessionId: schema.chatMessages.sessionId,
-    })
-    .from(schema.chatToolCallLog)
-    .innerJoin(
-      schema.chatMessages,
-      eq(schema.chatMessages.id, schema.chatToolCallLog.messageId),
-    )
-    .innerJoin(
-      schema.chatSessions,
-      eq(schema.chatSessions.id, schema.chatMessages.sessionId),
-    )
-    .where(eq(schema.chatSessions.householdId, householdId))
-    .orderBy(desc(schema.chatToolCallLog.createdAt))
-    .limit(100);
+  // Categorization log + chat tool-call log: independent reads, parallelize.
+  const [catLogs, chatLogs] = await Promise.all([
+    db
+      .select()
+      .from(schema.categorizationLog)
+      .where(eq(schema.categorizationLog.householdId, householdId))
+      .orderBy(desc(schema.categorizationLog.createdAt))
+      .limit(100),
+    // Chat tool-call log — join via chat_message → chat_session for household scoping.
+    db
+      .select({
+        id: schema.chatToolCallLog.id,
+        toolName: schema.chatToolCallLog.toolName,
+        argsJson: schema.chatToolCallLog.argsJson,
+        rowsReturned: schema.chatToolCallLog.rowsReturned,
+        durationMs: schema.chatToolCallLog.durationMs,
+        error: schema.chatToolCallLog.error,
+        createdAt: schema.chatToolCallLog.createdAt,
+        sessionId: schema.chatMessages.sessionId,
+      })
+      .from(schema.chatToolCallLog)
+      .innerJoin(
+        schema.chatMessages,
+        eq(schema.chatMessages.id, schema.chatToolCallLog.messageId),
+      )
+      .innerJoin(
+        schema.chatSessions,
+        eq(schema.chatSessions.id, schema.chatMessages.sessionId),
+      )
+      .where(eq(schema.chatSessions.householdId, householdId))
+      .orderBy(desc(schema.chatToolCallLog.createdAt))
+      .limit(100),
+  ]);
 
   return (
     <div className="space-y-6">
