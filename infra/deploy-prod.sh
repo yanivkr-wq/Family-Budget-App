@@ -60,6 +60,15 @@ prompt_if_unset() {
     if [[ -z "$val" && "$var" != "SMTP_PASS" ]]; then
       die "$var is required"
     fi
+    # IP validation — terminal paste races have truncated this in the past.
+    # Re-prompt until we get a valid 4-octet IPv4.
+    if [[ "$var" == "SERVER_IP" ]]; then
+      while ! [[ "$val" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; do
+        warn "got '$val' — that doesn't look like a 4-octet IPv4 address"
+        IFS= read -rp "    Try again ($desc): " val
+        [[ -z "$val" ]] && die "SERVER_IP is required"
+      done
+    fi
     # nameref avoids eval — safe for values containing $, `, etc.
     declare -gn _ref="$var"
     _ref="$val"

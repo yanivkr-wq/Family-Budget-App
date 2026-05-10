@@ -232,6 +232,24 @@ You're done. Total time: ~30-45 min.
 
 When you've made code changes locally and want to push them to prod:
 
+### Fastest path: `infra/update-prod.sh`
+
+```bash
+# On the server
+cd /opt/family-budget && ./infra/update-prod.sh
+```
+
+This script:
+- Discards local mode/whitespace changes that block `git pull`
+- Pulls latest from GitHub
+- Detects + applies new database migrations
+- Rebuilds web + worker images (cached layers reused — usually 30-90 sec)
+- Recreates those containers (~10 sec downtime)
+- Leaves Postgres + Caddy untouched
+- Prints status
+
+If `git pull` shows nothing to update, the script exits early without touching anything.
+
 ### Option A — Manual via SSH
 
 ```powershell
