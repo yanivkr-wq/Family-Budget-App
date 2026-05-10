@@ -49,3 +49,6 @@ infra/secrets/
 
 # Sample bank/CC exports for local analysis — contains real PII, never commit
 samples/
+
+# DB pre-wipe backup folders (contain real transaction data — never commit)
+pre_wipe_backup_*/
