@@ -5,6 +5,29 @@ Family Budget App to a Hetzner VPS (or any Ubuntu 22.04+ box with Docker).
 
 ---
 
+## Fast path (recommended): `infra/deploy-prod.sh`
+
+After Docker is installed and the repo is cloned, the entire deploy is a
+single script:
+
+```bash
+# On the server, after `apt install docker-ce` + `git clone ...`:
+cd /opt/family-budget
+chmod +x infra/deploy-prod.sh
+./infra/deploy-prod.sh
+```
+
+It prompts for the IP, your Anthropic key, Gmail app password, B2
+credentials, and admin email/password — then generates secrets, writes
+`.env`, builds images, brings the stack up, runs migrations, seeds the
+household + categories, and creates the admin user. Idempotent: safe to
+re-run if any step fails.
+
+The manual step-by-step below is the same flow broken into individual
+commands, useful for debugging or one-off operations.
+
+---
+
 ## First deploy (one-time, ~30-45 min total)
 
 ### Step 1 — SSH into the server
@@ -138,15 +161,17 @@ If any are restarting, check logs: `docker compose -f infra/docker-compose.yml l
 
 ### Step 8 — Run database migrations
 
+The worker container has the source files + tsx (devDep of @fba/db).
+Invoke it via the package-local bin path:
+
 ```bash
-docker compose -f infra/docker-compose.yml exec web \
-  node /app/packages/db/dist/migrate.js
+docker compose -f infra/docker-compose.yml exec worker \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/migrate.ts
 ```
 
-Or if the migrate script isn't built into the image:
+If that fails, you can apply migrations manually via psql:
 
 ```bash
-# From inside the postgres container — apply each migration manually
 for f in /opt/family-budget/packages/db/drizzle/*.sql; do
   echo "Applying $f"
   docker compose -f infra/docker-compose.yml exec -T postgres \
@@ -154,15 +179,20 @@ for f in /opt/family-budget/packages/db/drizzle/*.sql; do
 done
 ```
 
-### Step 9 — Bootstrap admin user
+### Step 9 — Seed household + categories, then bootstrap admin user
+
+`create-admin` requires a household to exist, which `seed` creates:
 
 ```bash
-docker compose -f infra/docker-compose.yml exec web \
-  node /app/packages/db/dist/create-admin.js you@email.com 'StrongPassword123!'
-```
+# 9a — household + default Hebrew categories (idempotent)
+docker compose -f infra/docker-compose.yml exec worker \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/seed.ts
 
-(Substitute your real email + a strong password. This creates the user
-record + household.)
+# 9b — admin user (substitute your real email + strong password)
+docker compose -f infra/docker-compose.yml exec worker \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/create-admin.ts \
+  --email=you@email.com --password='StrongPassword123!'
+```
 
 ### Step 10 — Verify
 
@@ -215,8 +245,8 @@ cd /opt/family-budget
 git pull
 docker compose -f infra/docker-compose.yml build web worker
 docker compose -f infra/docker-compose.yml up -d web worker
-docker compose -f infra/docker-compose.yml exec web \
-  node /app/packages/db/dist/migrate.js   # only if migrations changed
+docker compose -f infra/docker-compose.yml exec worker \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/migrate.ts   # only if migrations changed
 docker compose -f infra/docker-compose.yml ps   # verify still running
 ```
 
@@ -247,14 +277,15 @@ docker compose -f infra/docker-compose.yml restart web
 
 ### Apply a new migration (after `git pull`)
 ```bash
-docker compose -f infra/docker-compose.yml exec web \
-  node /app/packages/db/dist/migrate.js
+docker compose -f infra/docker-compose.yml exec worker \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/migrate.ts
 ```
 
 ### Rotate the admin password
 ```bash
-docker compose -f infra/docker-compose.yml exec web \
-  node /app/packages/db/dist/reset-password.js you@email.com 'NewStrongPassword456!'
+docker compose -f infra/docker-compose.yml exec worker \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/reset-password.ts \
+  --email=you@email.com --password='NewStrongPassword456!'
 ```
 
 ### Stop everything (e.g. before a long maintenance)
