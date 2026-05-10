@@ -103,14 +103,21 @@ PG_PASS="$(cat infra/secrets/postgres_password)"
 
 # .env-level secrets — only generate if .env doesn't already have a real value
 existing_env_val() {
-  # Read VAR=value from .env, return value (or empty if missing or placeholder)
-  [[ -f .env ]] || return
+  # Read VAR=value from .env, return value (or empty if missing or placeholder).
+  # Must always return 0 — `set -e` aborts on a failing command substitution
+  # in an assignment, so a non-zero return here would silently kill the script
+  # on first run (when .env doesn't exist yet).
+  if [[ ! -f .env ]]; then
+    echo ""
+    return 0
+  fi
   local v
   v="$(grep -E "^$1=" .env | head -1 | cut -d= -f2- || true)"
   case "$v" in
     ""|GENERATE_ME_ON_SERVER|REPLACE_*|YOUR_*) echo "" ;;
     *) echo "$v" ;;
   esac
+  return 0
 }
 
 MASTER_KEY="$(existing_env_val MASTER_KEY)"
