@@ -52,6 +52,13 @@ export function TransactionsFilter(props: {
   totalCount: number;
   filteredCount: number;
   onChange: (f: FilterState) => void;
+  /**
+   * Optional slot rendered at the end of the filter flex row. Used to hang
+   * page-level toggles (הצג העברות / פירוט אשראי) on the same line as the
+   * filters so the page header stays clean and everything that affects the
+   * transaction list is in one visual band.
+   */
+  extraControls?: React.ReactNode;
 }) {
   const { filter, onChange } = props;
 
@@ -84,6 +91,7 @@ export function TransactionsFilter(props: {
           className="rounded-md border bg-background px-2 py-1.5 text-sm"
         >
           <option value="">כל הקטגוריות</option>
+          <option value="none">ללא קטגוריה</option>
           {props.categories.map((c) => (
             <option key={c.id} value={c.id}>
               {c.nameHe}
@@ -157,6 +165,16 @@ export function TransactionsFilter(props: {
             <X className="size-3" />
             נקה
           </button>
+        )}
+
+        {/* Page-level toggles slot — pushed to the end of the row via
+            ms-auto so they sit at the visually-leading edge in RTL.
+            Subtle vertical divider separates them from the filter controls
+            since they're a different concern (display state, not filtering). */}
+        {props.extraControls && (
+          <div className="ms-auto flex shrink-0 items-center gap-1.5 border-s border-border ps-2">
+            {props.extraControls}
+          </div>
         )}
       </div>
 

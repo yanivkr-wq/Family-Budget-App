@@ -49,9 +49,12 @@ export const feedback = pgTable(
     pagePath: text(),
     /** Browser UA — useful for "this only happens on mobile" repros. */
     userAgent: text(),
-    status: text({ enum: ['open', 'in_progress', 'resolved', 'dismissed'] })
+    status: text({ enum: ['open', 'in_progress', 'pending_validation', 'resolved', 'dismissed'] })
       .notNull()
       .default('open'),
+    /** Optional inline base64 PNG (with data: URI prefix) captured via the
+     *  camera button in the feedback widget. NULL for text-only feedback. */
+    screenshotData: text(),
     resolvedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },

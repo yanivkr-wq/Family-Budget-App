@@ -227,6 +227,21 @@ export interface UpdateTransactionInput {
    *  exclude. Models capex/opex — see helpers/project-filter.ts. Optional
    *  — when undefined, existing value is preserved. */
   includeInMonthlyOverride?: boolean;
+  /**
+   * "Accounting noise" flag: row stays visible in the transactions list
+   * + its project (if tagged) but is EXCLUDED from every spending math
+   * aggregation — monthly totals, project totals, insights, exports
+   * marked "for sums only", etc.
+   *
+   * Use cases:
+   *   - CC settlement lines (auto-set by the import process)
+   *   - Loan refinancing where one loan is opened only to be closed by
+   *     another a month later (real bookkeeping but zero cash impact)
+   *   - Internal corrections / reversals
+   *
+   * Optional — when undefined, existing value is preserved.
+   */
+  excludedFromTotals?: boolean;
 }
 
 export async function updateTransaction(
@@ -340,6 +355,9 @@ export async function updateTransaction(
       ...(input.isTransfer !== undefined ? { isTransfer: input.isTransfer } : {}),
       ...(input.includeInMonthlyOverride !== undefined
         ? { includeInMonthlyOverride: input.includeInMonthlyOverride }
+        : {}),
+      ...(input.excludedFromTotals !== undefined
+        ? { excludedFromTotals: input.excludedFromTotals }
         : {}),
       updatedAt: new Date(),
     })

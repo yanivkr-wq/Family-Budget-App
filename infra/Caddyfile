@@ -1,36 +1,52 @@
 # Family Budget App — Caddy reverse proxy
-# Replace `budget.example.com` with your domain.
+#
+# IP-ONLY MODE (current): no domain yet, so we serve over plain HTTP and
+# also expose HTTPS with Caddy's INTERNAL CA (self-signed). Browsers will
+# show a "Not secure" warning — that's expected. The data path is still
+# proxied through Caddy → web container, so once you add a real domain
+# this file is updated in two places (the http://:80 server block label
+# and the email at the top) and you get real Let's Encrypt HTTPS
+# automatically with no other changes.
+#
+# To switch to a real domain (5-min change):
+#   1. Replace the `email you@example.com` line with your real email
+#   2. Replace the `:80` server label with `your-domain.com`
+#   3. Add `redir https://your-domain.com{uri}` block under it
+#   4. docker compose restart caddy
 
 {
-    email you@example.com
+    # Email used for Let's Encrypt registration once you switch to a real
+    # domain. Harmless to leave as a placeholder while in IP-only mode.
+    email admin@example.com
 }
 
-budget.example.com {
+# Public HTTP entry point. We accept any host (no name match) so requests
+# coming in by IP work. Forward everything to the web container; Next.js
+# handles the rest.
+:80 {
     encode zstd gzip
 
-    # Security headers
+    # Security headers — applied to every response. Same set as the
+    # eventual domain config so behavior matches.
     header {
-        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' https://fonts.gstatic.com data:"
+        # NOTE: HSTS is intentionally OMITTED in IP-only mode — once a
+        # browser caches HSTS for an IP it can lock the user out for
+        # months if HTTPS breaks. Re-enable when you switch to a domain.
         -Server
     }
 
-    # The worker is internal-only. Do not expose /chat, /scrape, etc. directly.
+    # Worker should never be reachable from the public internet. The
+    # web app talks to it on the internal docker network only.
     handle /worker/* {
-        respond 404
+        respond "Not found" 404
     }
 
     reverse_proxy web:3000 {
-        # SSE keepalive for the chat endpoint
+        # SSE keepalive (chat endpoint, notifications poller)
         flush_interval -1
     }
-}
-
-# Redirect any other host to the canonical one (defends against host-header spoofing).
-:80 {
-    redir https://budget.example.com{uri}
 }

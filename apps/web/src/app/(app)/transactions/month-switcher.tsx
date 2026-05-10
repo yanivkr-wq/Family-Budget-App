@@ -15,6 +15,22 @@ import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatMonthHe } from '@fba/shared';
 
+const MONTH_COOKIE = 'fba_month';
+const COOKIE_MAX_AGE_S = 60 * 60 * 24 * 365; // 1 year, mirrors active-month.ts
+
+/**
+ * Persist the active month to a cookie so navigating to another page
+ * (e.g. /transactions → /) preserves the choice. Pages read this cookie
+ * via readActiveMonth() in @/lib/active-month.
+ *
+ * Centralized here (and also in the dropdown / prev / next anchors via
+ * onClick) so every interaction with the month picker stamps the cookie.
+ */
+function rememberMonth(m: string) {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${MONTH_COOKIE}=${m}; path=/; max-age=${COOKIE_MAX_AGE_S}; SameSite=Lax`;
+}
+
 function addMonth(yearMonth: string, delta: number): string {
   const [y, m] = yearMonth.split('-').map(Number);
   let nm = m! + delta;
@@ -62,6 +78,7 @@ export function MonthSwitcher({
       {/* Previous month — quick step */}
       <a
         href={buildHref(prev)}
+        onClick={() => rememberMonth(prev)}
         className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
         title={`חודש קודם: ${formatMonthHe(prev)}`}
         aria-label={`חודש קודם: ${formatMonthHe(prev)}`}
@@ -74,7 +91,10 @@ export function MonthSwitcher({
         <span className="text-xs font-medium text-primary">{label}</span>
         <select
           value={month}
-          onChange={(e) => router.push(buildHref(e.target.value))}
+          onChange={(e) => {
+            rememberMonth(e.target.value);
+            router.push(buildHref(e.target.value));
+          }}
           className="cursor-pointer bg-transparent text-center font-semibold focus:outline-none focus:ring-2 focus:ring-ring rounded"
           aria-label="בחר חודש"
         >
@@ -89,6 +109,7 @@ export function MonthSwitcher({
       {/* Next month — quick step */}
       <a
         href={buildHref(next)}
+        onClick={() => rememberMonth(next)}
         className="flex items-center rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
         title={`חודש הבא: ${formatMonthHe(next)}`}
         aria-label={`חודש הבא: ${formatMonthHe(next)}`}

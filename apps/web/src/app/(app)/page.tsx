@@ -20,6 +20,7 @@ import { readActiveView } from '@/components/view-tabs-server';
 import { MonthSwitcher } from './transactions/month-switcher';
 import { INSIGHT_ICONS, type InsightIconName } from './dashboard-insight-icons';
 import { excludeHiddenProjectTxns } from '@/lib/project-filter';
+import { readActiveMonth } from '@/lib/active-month';
 import {
   Wallet,
   TrendingDown,
@@ -34,6 +35,9 @@ import {
   ChevronLeft,
   Info,
   Briefcase,
+  CalendarCheck,
+  Pencil,
+  Lightbulb,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -58,9 +62,14 @@ export default async function DashboardPage(props: {
   // returns May 2026 rather than April, matching where today's transactions are billed.
   const cur = activeBillingMonth(10);
 
+  // Resolve month: URL param > fba_month cookie > most-recent-with-data > current.
+  // The cookie persists the user's last picked month across pages so clicking
+  // through to /transactions, /history etc. keeps the same month in view.
+  const cookieMonth = await readActiveMonth(sp.month);
+
   // ── Parallel 1: month detection + account list (no dependency between them) ─
   const [latestMonthRows, allAccounts] = await Promise.all([
-    sp.month
+    cookieMonth
       ? Promise.resolve<Array<{ m: string }>>([])
       : db
           .select({ m: sql<string>`max(${schema.transactions.billingMonth})` })
@@ -79,8 +88,13 @@ export default async function DashboardPage(props: {
       .from(schema.accounts)
       .where(eq(schema.accounts.householdId, householdId)),
   ]);
-  const month = sp.month ?? latestMonthRows[0]?.m ?? cur;
+  const month = cookieMonth ?? latestMonthRows[0]?.m ?? cur;
 
+  // Account filter:
+  //   personal/business → restrict to that purpose + 'shared' accounts
+  //   combined          → ALL accounts (no filter)
+  //   household         → ALL accounts (same as combined; the difference
+  //                       is project inclusion, not account scope)
   let accountFilter: string[] | null = null;
   if (view === 'personal') {
     accountFilter = allAccounts
@@ -99,14 +113,25 @@ export default async function DashboardPage(props: {
     eq(schema.transactions.billingMonth, month),
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, false),
-    // Hide transactions tagged to a project with excludeFromMonthlyTotals=true
-    // (e.g. multi-year construction). They have their own per-project view at
-    // /projects/[id]; including them here would drown out regular spending.
-    excludeHiddenProjectTxns(),
   ];
-  if (view === 'combined') {
+  // Project-tagged transactions (construction, big remodels) are normally
+  // hidden from the monthly views so they don't drown out regular spending.
+  // The HOUSEHOLD view explicitly includes them — it's the "show me everything
+  // including projects" lens for cash-flow validation.
+  if (view !== 'household') {
+    baseConditions.push(excludeHiddenProjectTxns());
+  }
+  // Transfers between own accounts are excluded from BOTH combined and
+  // household views to prevent double-counting (the same money would appear
+  // as both income on one side and expense on the other).
+  if (view === 'combined' || view === 'household') {
     baseConditions.push(eq(schema.transactions.isTransfer, false));
   }
+  // Settlement-basis accounting (migration 0015): exclude CC detail rows
+  // already covered by their bank-side settlement line, plus user-flagged
+  // accounting noise (loan refinancing, internal corrections). Forex CC
+  // charges keep excluded_from_totals=false so they're still counted.
+  baseConditions.push(eq(schema.transactions.excludedFromTotals, false));
   if (accountFilter && accountFilter.length > 0) {
     baseConditions.push(inArray(schema.transactions.accountId, accountFilter));
   }
@@ -122,8 +147,12 @@ export default async function DashboardPage(props: {
     eq(schema.transactions.billingMonth, month),
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, true),
-    excludeHiddenProjectTxns(),
   ];
+  // Same project-inclusion rule as baseConditions — household view sees
+  // projected installments tagged to projects too.
+  if (view !== 'household') {
+    projectedConditions.push(excludeHiddenProjectTxns());
+  }
   if (accountFilter && accountFilter.length > 0) {
     projectedConditions.push(inArray(schema.transactions.accountId, accountFilter));
   }
@@ -576,9 +605,10 @@ export default async function DashboardPage(props: {
           <ViewTabs
             current={view}
             hrefs={{
-              combined: `/?view=combined&month=${month}`,
-              personal: `/?view=personal&month=${month}`,
-              business: `/?view=business&month=${month}`,
+              combined:  `/?view=combined&month=${month}`,
+              personal:  `/?view=personal&month=${month}`,
+              business:  `/?view=business&month=${month}`,
+              household: `/?view=household&month=${month}`,
             }}
           />
           <MonthSwitcher
@@ -628,6 +658,8 @@ export default async function DashboardPage(props: {
       {noAccountsForView && (
         <div className="rounded-md border border-warning/40 bg-warning-soft p-3 text-sm text-warning">
           לא סומנו חשבונות{' '}
+          {/* household + combined never trigger noAccountsForView (no filter),
+              so the only realistic branches here are business and personal. */}
           <strong>{view === 'business' ? 'עסקיים' : 'אישיים'}</strong>. כדי שתצוגה זו תציג נתונים, פתח{' '}
           <Link href="/admin/accounts" className="underline">
             חשבונות
@@ -665,7 +697,12 @@ export default async function DashboardPage(props: {
           info={
             'איך החישוב עובד:\n' +
             `• סכמתי את כל התנועות עם billing_month = ${month}.\n` +
-            `• נספרות תנועות ${view === 'combined' ? 'בכל החשבונות (משולב, ללא העברות פנימיות)' : view === 'personal' ? 'בחשבונות אישיים + משותפים' : 'בחשבונות עסקיים + משותפים'}.\n` +
+            `• נספרות תנועות ${
+              view === 'combined' ? 'בכל החשבונות (משולב, ללא העברות פנימיות)' :
+              view === 'personal' ? 'בחשבונות אישיים + משותפים' :
+              view === 'business' ? 'בחשבונות עסקיים + משותפים' :
+              /* household */ 'בכל החשבונות + תנועות פרויקטים (תזרים מלא של משק הבית, ללא העברות פנימיות)'
+            }.\n` +
             '• "הוצאות" = סכום מוחלט של כל התנועות עם סכום שלילי (כסף שיצא).\n' +
             '• הקטגוריה לא משפיעה — מה שקובע זה הסימן (חיובי = הכנסה, שלילי = הוצאה).\n' +
             '• אם תייגת תנועה בקטגוריית הוצאה והסכום חיובי (החזר/זיכוי), היא תיחשב להכנסה ולא תקטין את ההוצאות.\n' +
@@ -683,9 +720,10 @@ export default async function DashboardPage(props: {
             '• "הכנסות" = סכום של כל התנועות החיוביות (כסף שנכנס).\n' +
             '• הקטגוריה לא משפיעה — מה שקובע זה הסימן.\n' +
             '• כולל: משכורת, קצבה, זיכויים, החזרים, הכנסות מהעסק.\n' +
-            '• בטאב "משולב" — העברות בין חשבונות שלך מוסטרות (אין כפל ספירה — אם סימנת אותן כ-isTransfer בעת הייבוא או בעריכה).\n' +
+            '• בטאב "משולב" / "משק בית" — העברות בין חשבונות שלך מוסטרות (אין כפל ספירה — אם סימנת אותן כ-isTransfer בעת הייבוא או בעריכה).\n' +
+            '• בטאב "משק בית" כולל גם הכנסות שמתויגות לפרויקטים (למשל מימון משכנתא); שאר הטאבים לא.\n' +
             '• בטאב אישי / עסקי — מסונן לחשבונות מאותו סוג.\n' +
-            '• מוסטרות: תנועות מחוקות, "צפוי", ופרויקטים מוסתרים.\n' +
+            '• מוסטרות: תנועות מחוקות, "צפוי", ופרויקטים מוסתרים (חוץ מטאב "משק בית" שכולל גם אותם).\n' +
             (suspiciousIncomeIls > 0
               ? `\n⚠️ זוהו ${formatIls(suspiciousIncomeIls, { decimals: false })} בתנועות חיוביות גדולות שמתויגות בקטגוריות הוצאה. ` +
                 'לרוב אלו העברות בין החשבונות שלך שלא סומנו כ"העברה". ' +
@@ -710,9 +748,13 @@ export default async function DashboardPage(props: {
             '• מאזן שלילי = הוצאת יותר ממה שהרווחת (אם זה לא חודש מיוחד — שווה לבדוק).\n' +
             '\nשים לב: זה המאזן עד היום (תנועות בפועל) ולא תחזית עד סוף החודש. ' +
             'לתחזית סוף-חודש ראה את הכרטיס ליד.\n' +
-            '\nמוסטרות מהחישוב: תנועות מחוקות, תנועות "צפוי" (מתוכננות), ותנועות שמתויגות ' +
-            'לפרויקט עם "הסתר מהתצוגות החודשיות". ' +
-            (view === 'combined' ? 'בטאב משולב — העברות בין חשבונות שלך (isTransfer=true) מוסטרות.' : '')
+            '\nמוסטרות מהחישוב: תנועות מחוקות, תנועות "צפוי" (מתוכננות)' +
+            (view === 'household'
+              ? '. בטאב "משק בית" כלולות גם תנועות פרויקטים מוסתרים — לאימות תזרים מלא של משק הבית.'
+              : ', ותנועות שמתויגות לפרויקט עם "הסתר מהתצוגות החודשיות".') +
+            ((view === 'combined' || view === 'household')
+              ? ' העברות בין חשבונות שלך (isTransfer=true) מוסטרות כדי למנוע ספירה כפולה.'
+              : '')
           }
         />
         <Tile
@@ -1179,10 +1221,28 @@ function ProjectsSummaryWidget({
           ניהול ←
         </Link>
       </div>
-      {/* Disclaimer banner — explain WHY these don't appear in monthly tiles */}
+      {/* Disclaimer banner — explain WHY these don't appear in monthly tiles.
+          Wording acknowledges the per-row "include in monthly" override so the
+          user understands why the totals here ≠ what they see in expense KPIs.
+          All icons are Lucide (matches the rest of the app); no emoji. */}
       <div className="border-b bg-amber-50/60 px-4 py-2 text-[11px] text-amber-900 dark:bg-amber-900/10 dark:text-amber-200">
-        💡 הסכומים כאן <strong>לא נספרים</strong> בכרטיסי הוצאות / הכנסות / מאזן
-        החודשיים — פרויקטים גדולים מנוהלים בנפרד כדי שלא יציפו את התזרים הרגיל.
+        <span className="inline-flex items-center gap-1">
+          <Lightbulb className="size-3 shrink-0" />
+          <span>
+            <strong>רוב</strong> הסכומים כאן לא נספרים בכרטיסי הוצאות / הכנסות / מאזן
+            החודשיים — פרויקטים גדולים מנוהלים בנפרד כדי שלא יציפו את התזרים הרגיל.
+          </span>
+        </span>
+        <br />
+        תנועות שסומנו ב-
+        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+          <CalendarCheck className="size-2.5" />
+          גם חודשי
+        </span>
+        {' '}<em>כן</em> נספרות בסיכומים החודשיים. בדף הפרויקט תראה את התווית הזו ליד כל תנועה כזו;
+        אפשר להוסיף או להסיר את הסימון מכפתור
+        {' '}<Pencil className="inline size-2.5 align-baseline" />{' '}
+        העריכה של תנועה בפרויקט.
       </div>
       <ul className="divide-y">
         {projects.map((p) => {

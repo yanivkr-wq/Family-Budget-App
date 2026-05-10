@@ -37,6 +37,8 @@ interface Transaction {
   /** Project this row belongs to (passed in just so the modal can decide
    *  whether to surface the override checkbox). null = no project. */
   projectId?: string | null;
+  /** "Accounting noise" — show the row but never count it in any sum. */
+  excludedFromTotals?: boolean;
 }
 
 export function EditTransactionModal(props: {
@@ -64,6 +66,7 @@ export function EditTransactionModal(props: {
   const [notes, setNotes] = useState(t.notes ?? '');
   const [isTransfer, setIsTransfer] = useState(!!t.isTransfer);
   const [includeInMonthlyOverride, setIncludeInMonthlyOverride] = useState(!!t.includeInMonthlyOverride);
+  const [excludedFromTotals, setExcludedFromTotals] = useState(!!t.excludedFromTotals);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -94,6 +97,7 @@ export function EditTransactionModal(props: {
         notes: notes.trim() || null,
         isTransfer,
         includeInMonthlyOverride,
+        excludedFromTotals,
       });
       if (!result.ok) {
         setError(result.error ?? 'שגיאה לא ידועה');
@@ -291,6 +295,38 @@ export function EditTransactionModal(props: {
               </div>
             </label>
           )}
+
+          {/* "Accounting noise" toggle — show but never count.
+              Used for: loan refinancing where one loan was opened just to
+              be closed by another (real bookkeeping line, zero cash impact);
+              CC settlement lines (auto-set during import); internal
+              corrections / reversals.
+              When checked, the row is excluded from EVERY sum:
+                • monthly dashboard/transactions totals
+                • project total expenses + income + net out-of-pocket
+                • insights spending math
+                • category summaries / charts
+              The row is still visible in lists for audit purposes. */}
+          <label className="col-span-2 flex items-start gap-2 rounded-md border border-slate-300/40 bg-slate-50/40 p-2.5 text-xs cursor-pointer dark:border-slate-700/40 dark:bg-slate-900/10">
+            <input
+              type="checkbox"
+              checked={excludedFromTotals}
+              onChange={(e) => setExcludedFromTotals(e.target.checked)}
+              className="mt-0.5"
+            />
+            <div className="flex-1">
+              <p className="font-medium text-foreground">
+                אל תספור בסיכומים (תנועה חשבונאית בלבד)
+              </p>
+              <p className="mt-0.5 text-muted-foreground">
+                התנועה <strong>תוצג ברשימה</strong> אבל <strong>לא תיכלל בשום סיכום</strong> —
+                לא בסיכומים החודשיים, לא בסיכומי הפרויקט, ולא בתובנות.
+                שימושי לתנועות שהן רק תיעוד חשבונאי ולא תזוזת כסף אמיתית —
+                למשל פתיחת הלוואה ישנה כדי לסגור אותה במשכנתא חדשה, או שורות
+                התאמה פנימיות.
+              </p>
+            </div>
+          </label>
         </div>
 
         <footer className="mt-4 flex items-center justify-end gap-2 border-t pt-3">

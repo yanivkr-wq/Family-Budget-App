@@ -70,7 +70,34 @@ export function BankExportImporter({ accounts }: { accounts: AccountOption[] }) 
           const fd = new FormData();
           fd.set('file', file);
           if (accountId) fd.set('accountId', accountId);
-          const r = await importBankExport(fd);
+          let r = await importBankExport(fd);
+
+          // ── Phase 3.5 SMART RE-UPLOAD ─────────────────────────────────
+          // Server detected this file's hash matches a previous import.
+          // Surface a clear native confirm() so the user makes a deliberate
+          // choice. On confirm, re-submit with force=1 to bypass the check.
+          // Per-row dedup still ensures no actual duplicates land in the DB.
+          if (!r.ok && r.duplicateFile) {
+            const dup = r.duplicateFile;
+            const when = dup.importedAt.slice(0, 10);
+            const proceed = window.confirm(
+              `קובץ "${file.name}" זהה לחלוטין לקובץ שכבר ייבאת בתאריך ${when}.\n` +
+              `(אז הוספו ${dup.insertedRows.toLocaleString('he-IL')} תנועות מאותו קובץ.)\n\n` +
+              `אישור = ייבוא חוזר. שורות שכבר קיימות יידחסו אוטומטית, ולכן לא ייווצרו כפילויות.\n\n` +
+              `האם להמשיך?`,
+            );
+            if (proceed) {
+              fd.set('force', '1');
+              r = await importBankExport(fd);
+            } else {
+              // User said no — leave the entry as a benign skip
+              setBatch((prev) => prev.map((b, idx) =>
+                idx === i ? { ...b, status: 'done', result: { ...r, message: 'דילוג על קובץ כפול' } } : b,
+              ));
+              continue;
+            }
+          }
+
           setBatch((prev) => prev.map((b, idx) =>
             idx === i ? { ...b, status: r.ok ? 'done' : 'error', result: r } : b,
           ));

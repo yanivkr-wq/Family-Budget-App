@@ -79,6 +79,10 @@ const config: Config = {
       animation: {
         'fade-in': 'fade-in 200ms ease-out',
         'slide-in-right': 'slide-in-right 250ms cubic-bezier(0.16, 1, 0.3, 1)',
+        // Drill-stack transition between BI levels on insight cards. Pairs a
+        // brief opacity ramp with a 4px upward slide so the swap reads as
+        // "we've gone deeper" without the page seeming to twitch.
+        'slide-fade': 'slide-fade 200ms cubic-bezier(0.16, 1, 0.3, 1)',
       },
       keyframes: {
         'fade-in': {
@@ -88,6 +92,10 @@ const config: Config = {
         'slide-in-right': {
           from: { transform: 'translateX(100%)' },
           to: { transform: 'translateX(0)' },
+        },
+        'slide-fade': {
+          from: { opacity: '0', transform: 'translateY(4px)' },
+          to:   { opacity: '1', transform: 'translateY(0)' },
         },
       },
     },

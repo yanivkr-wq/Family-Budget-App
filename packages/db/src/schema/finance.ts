@@ -64,6 +64,19 @@ export const accounts = pgTable(
      * account in the admin UI.
      */
     externalKey: text(),
+    /**
+     * Credit-card accounts only — the merchant-name substring used to find
+     * the matching settlement line on the linked bank account. e.g. "דיינרס"
+     * matches the bank-side "דיינרס קלוב-י -₪41,349" row that pays for this
+     * CC's monthly cycle. NULL for bank accounts and for CCs the user hasn't
+     * configured yet (the importer auto-suggests on first match against
+     * CC_SETTLEMENT_PATTERNS).
+     *
+     * Powers the "settlement-basis accounting" model on /insights: the bank
+     * settlement line is the source of truth for monthly totals; the CC
+     * detail rows are excluded via excluded_from_totals=true.
+     */
+    settlementMerchantPattern: text(),
     currency: text().notNull().default('ILS'),
     isActive: boolean().notNull().default(true),
     lastScrapedAt: timestamp({ withTimezone: true }),
@@ -278,6 +291,25 @@ export const transactions = pgTable(
     /** Links the two sides of a transfer (out from one account, in to another). */
     transferPairId: uuid().references((): any => transactions.id, { onDelete: 'set null' }),
     isManual: boolean().notNull().default(false),
+    /**
+     * When TRUE, this row is rendered in lists but excluded from spending
+     * math (KPI totals, cycle banners, insights cards, dashboard tiles).
+     *
+     * Set on non-forex CC detail rows under the "settlement-basis accounting"
+     * model — the bank-side settlement line ("דיינרס -₪41K") is counted
+     * instead, and counting both would double-count.
+     *
+     * Forex CC details keep this FALSE — they're charged immediately and
+     * have no settlement line bundling them, so they ARE the source of truth
+     * for their own outflow.
+     *
+     * Conceptually overlaps with is_transfer (both mean "don't count toward
+     * totals") but the semantic is distinct:
+     *   - is_transfer = cross-account movement (same money, different account)
+     *   - excluded_from_totals = represented elsewhere (the bank settlement
+     *     line is the canonical row for these CC details)
+     */
+    excludedFromTotals: boolean().notNull().default(false),
     notes: text(),
     /**
      * Which category_rule last set the category on this transaction. NULL means the
@@ -369,6 +401,24 @@ export const recurringPatterns = pgTable(
     status: text({ enum: ['active', 'paused', 'ended'] })
       .notNull()
       .default('active'),
+    /**
+     * Subscription lifecycle (added in migration 0017):
+     *
+     *   subscriptionEndDate — when the current paid period ends. NULL means
+     *     open-ended (no defined end). Populated for fixed-term contracts
+     *     (annual gym membership, 12-month phone plan) so the user can plan
+     *     around them.
+     *   autoRenew — does the subscription auto-renew at end_date? Defaults
+     *     to true (most monthly services). Flip to false when the user
+     *     intends to cancel or when the contract is genuinely one-shot.
+     *   cancelNoticeDays — how many days BEFORE end_date the user must
+     *     cancel to avoid auto-renewal. The "expiring soon" insight uses
+     *     this to surface patterns whose CANCEL deadline (end_date - notice)
+     *     is approaching, not just the end date itself.
+     */
+    subscriptionEndDate: date(),
+    autoRenew: boolean().notNull().default(true),
+    cancelNoticeDays: integer().notNull().default(0),
     notes: text(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
@@ -376,6 +426,7 @@ export const recurringPatterns = pgTable(
   (t) => ({
     householdIdx: index().on(t.householdId),
     merchantUnique: unique().on(t.householdId, t.merchantNormalized),
+    endDateIdx: index('recurring_pattern_end_date_idx').on(t.householdId, t.subscriptionEndDate),
   }),
 );
 

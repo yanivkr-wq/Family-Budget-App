@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { ChatDrawer } from '@/components/chat-drawer';
 import { MobileBottomNav, SidebarNav } from '@/components/nav';
 import { GlobalHeader } from '@/components/global-header';
+import { NotificationsBellServer } from '@/components/notifications-bell-server';
 import { FeedbackWidget } from '@/components/feedback-widget';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -20,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <GlobalHeader
         userName={session.user.name ?? null}
         signOutAction={signOutAction}
+        bell={<NotificationsBellServer />}
       />
 
       {/* ── Below header: sidebar + content ── */}

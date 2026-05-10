@@ -18,13 +18,13 @@
  */
 
 import Link from 'next/link';
-import { User as UserIcon, Briefcase, Users, type LucideIcon } from 'lucide-react';
+import { User as UserIcon, Briefcase, Users, Home, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const VIEW_COOKIE = 'fba_view';
 const COOKIE_MAX_AGE_S = 60 * 60 * 24 * 365; // 1 year
 
-export type View = 'personal' | 'business' | 'combined';
+export type View = 'personal' | 'business' | 'combined' | 'household';
 
 interface ViewOption {
   value:    View;
@@ -41,8 +41,9 @@ interface ViewOption {
 }
 
 // Order: combined first (the default "everything together" view), then
-// personal, then business. The order matches how users typically scan
-// (broadest → narrowest).
+// personal, then business, then household at the end as the broadest
+// "everything-including-projects" lens. The first three are the everyday
+// spending views; household is the auditing / cash-flow validation view.
 export const VIEW_OPTIONS: ViewOption[] = [
   {
     value:    'combined',
@@ -70,6 +71,21 @@ export const VIEW_OPTIONS: ViewOption[] = [
     helpText: 'חשבונות עסקיים בלבד',
     activeClass: 'bg-slate-300 text-slate-900 dark:bg-slate-600 dark:text-slate-100',
     stripeClass: 'bg-slate-500 dark:bg-slate-400',
+  },
+  {
+    // Household view = comprehensive validation lens. UNLIKE combined, it
+    // INCLUDES project transactions (construction, big remodels, etc.) so
+    // the user can see the true total cash flow of the household — every
+    // shekel in, every shekel out. Use case: "did we cover all our
+    // expenses this month including the project draws?"
+    value:    'household',
+    label:    'משק בית',
+    icon:     Home,
+    helpText: 'תזרים מלא של משק הבית כולל פרויקטים — לאימות תקציב כולל',
+    // Emerald — communicates "comprehensive / healthy overview", distinct
+    // from the other three colors.
+    activeClass: 'bg-emerald-200 text-emerald-900 dark:bg-emerald-900/60 dark:text-emerald-100',
+    stripeClass: 'bg-emerald-500 dark:bg-emerald-600',
   },
 ];
 

@@ -9,9 +9,15 @@ import { he } from '@fba/shared';
 interface Props {
   userName: string | null;
   signOutAction: () => Promise<void>;
+  /**
+   * Slot for the notifications bell. Server-rendered upstream so the unread
+   * badge is correct on first paint; sits between the search trigger and the
+   * user info.
+   */
+  bell?: React.ReactNode;
 }
 
-export function GlobalHeader({ userName, signOutAction }: Props) {
+export function GlobalHeader({ userName, signOutAction, bell }: Props) {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ── Global Cmd+K / Ctrl+K shortcut ───────────────────────────────────────
@@ -59,6 +65,7 @@ export function GlobalHeader({ userName, signOutAction }: Props) {
 
         {/* ── User info + sign-out ───────────────────────────────────── */}
         <div className="ms-auto flex shrink-0 items-center gap-1">
+          {bell}
           {userName && (
             <span className="hidden text-sm text-muted-foreground md:inline">
               {userName}

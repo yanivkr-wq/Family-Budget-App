@@ -1,12 +1,17 @@
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
-import { getDb, schema, activeBillingMonth, billingCycleRange } from '@fba/db';
-import { and, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
+import { getDb, schema, activeBillingMonth, billingCycleRange, isSettlementLineExpr } from '@fba/db';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import { formatIls, formatMonthHe, formatShortDateHe, he } from '@fba/shared';
 import { createTransaction } from './actions';
 import { redirect } from 'next/navigation';
 import { TransactionsList } from './transactions-list';
 import { MonthSwitcher } from './month-switcher';
+import { ShowTransfersToggle } from './show-transfers-toggle';
+import { CcViewToggle } from './cc-view-toggle';
+import { TransactionsExportButton } from './export-button';
+import { InfoModalButton } from '@/components/ui/info-modal-button';
+import { readActiveMonth } from '@/lib/active-month';
 import { autoComputeChargeDate } from '@/lib/charge-date';
 import { Clock, CheckCircle2, CalendarClock } from 'lucide-react';
 import { ViewTabs, ViewStripe, type View } from '@/components/view-tabs';
@@ -26,21 +31,32 @@ function addMonth(yearMonth: string, delta: number): string {
 }
 
 export default async function TransactionsPage(props: {
-  searchParams: Promise<{ month?: string; view?: string; error?: string; ok?: string }>;
+  searchParams: Promise<{ month?: string; view?: string; error?: string; ok?: string; showTransfers?: string; ccView?: string }>;
 }) {
   const session = await auth();
   const householdId = session!.user.householdId;
   const sp = await props.searchParams;
   // `month` here is a calendar month, e.g. "2026-05"
-  const month = sp.month ?? activeBillingMonth(10);
+  // Resolution: URL param > fba_month cookie > activeBillingMonth(10).
+  // Cookie persistence makes the active month sticky across pages.
+  const month = (await readActiveMonth(sp.month)) ?? activeBillingMonth(10);
   // View tab: filters to accounts of a given purpose. Resolved from URL →
   // fba_view cookie → 'combined' default; cookie keeps the view sticky as
   // the user moves between pages.
   const view: View = await readActiveView(sp.view);
+  // Cross-account transfer rows hidden by default. Pass ?showTransfers=1.
+  const showTransfers = sp.showTransfers === '1';
+  // Phase 6 — CC view mode. Two states:
+  //   undefined / 'settlement' (DEFAULT): show settlement lines (bank-side
+  //     "דיינרס -₪41K" rows), hide CC details (excluded_from_totals=true).
+  //     This is the "source of truth" view; matches the canonical totals.
+  //   'details': show CC details, HIDE bank-side settlement lines via
+  //     pattern detection. Same totals (math invariant), different visual.
+  const ccView: 'settlement' | 'details' = sp.ccView === 'details' ? 'details' : 'settlement';
   const db = getDb();
 
   // Load lookup data for the form. We pull `purpose` so we can filter by view.
-  const [allAccountsRaw, categories, rules, projects] = await Promise.all([
+  const [allAccountsRaw, categories, rules, projects, txnIdsWithNotificationsRaw] = await Promise.all([
     db
       .select({ id: schema.accounts.id, name: schema.accounts.name, type: schema.accounts.type, purpose: schema.accounts.purpose })
       .from(schema.accounts)
@@ -83,30 +99,77 @@ export default async function TransactionsPage(props: {
         ),
       )
       .orderBy(schema.projects.createdAt),
+    // Notification associations — which transactions have at least one
+    // notification task linked to them. Drives the colored bell on each
+    // row so the user can see at a glance which txns already have a
+    // reminder set up. We exclude completed/cancelled tasks because those
+    // no longer represent an "active" reminder relationship.
+    db
+      .select({ transactionId: schema.notificationTasks.transactionId })
+      .from(schema.notificationTasks)
+      .where(
+        and(
+          eq(schema.notificationTasks.householdId, householdId),
+          isNotNull(schema.notificationTasks.transactionId),
+          ne(schema.notificationTasks.status, 'completed'),
+          ne(schema.notificationTasks.status, 'cancelled'),
+        ),
+      ),
   ]);
+  const txnIdsWithNotifications = new Set(
+    txnIdsWithNotificationsRaw
+      .map((r) => r.transactionId)
+      .filter((id): id is string => id !== null),
+  );
+
+  // Household contacts for the per-row "set reminder" modal recipient picker.
+  const notificationContacts = await db
+    .select({
+      id:        schema.notificationContacts.id,
+      label:     schema.notificationContacts.label,
+      phoneE164: schema.notificationContacts.phoneE164,
+      email:     schema.notificationContacts.email,
+      isDefault: schema.notificationContacts.isDefault,
+    })
+    .from(schema.notificationContacts)
+    .where(eq(schema.notificationContacts.householdId, householdId))
+    .orderBy(schema.notificationContacts.label);
 
   const topCats = categories.filter((c) => !c.parentId).sort((a, b) => a.sortOrder - b.sortOrder);
   const subCats = categories.filter((c) => !!c.parentId);
 
   // ── View-tab filter ────────────────────────────────────────────────────────
   // 'shared'-purpose accounts always show in personal AND business views.
-  // 'combined' = no filter at all.
-  const accountFilter: string[] | null = view === 'combined'
+  // 'combined' and 'household' = no account filter (both show all accounts);
+  // they differ only in project-row inclusion (handled below in WHERE clauses).
+  const showAllAccounts = view === 'combined' || view === 'household';
+  const accountFilter: string[] | null = showAllAccounts
     ? null
     : allAccountsRaw
         .filter((a) => a.purpose === view || a.purpose === 'shared')
         .map((a) => a.id);
   const noAccountsForView = accountFilter !== null && accountFilter.length === 0;
   // The form/table only show the accounts visible in the current view.
-  const accounts = view === 'combined'
+  const accounts = showAllAccounts
     ? allAccountsRaw
     : allAccountsRaw.filter((a) => a.purpose === view || a.purpose === 'shared');
+
+  // Project-row inclusion: every view EXCEPT household hides transactions
+  // tagged to a project with excludeFromMonthlyTotals=true. Household view
+  // explicitly INCLUDES them so the user can audit total household cash flow
+  // (regular monthly + project capex together).
+  const projectFilter = view === 'household' ? undefined : excludeHiddenProjectTxns();
 
   // ── Calendar-month range for the query ────────────────────────────────────
   const [y, m] = month.split('-').map(Number);
   const monthStart   = `${month}-01`;
   const daysInMonth  = new Date(y!, m!, 0).getDate(); // day-0 of next month = last day of this month
   const monthEnd     = `${month}-${String(daysInMonth).padStart(2, '0')}`;
+
+  // Cycle dates needed early (used by the cycleBreakdownQuery below).
+  const range = billingCycleRange(month, 10);
+  const cycleChargeDate = range?.end ?? `${month}-10`;
+  const nextCycleChargeDate = `${addMonth(month, 1)}-10`;
 
   /**
    * Fetch everything relevant to this calendar month:
@@ -170,6 +233,17 @@ export default async function TransactionsPage(props: {
       // reflects the correct toggle state (was previously omitted, so
       // toggling "isTransfer" off→on→off in the same session lost state).
       isTransfer: schema.transactions.isTransfer,
+      // Settlement-basis flag (migration 0015). When TRUE, this row is a
+      // CC detail covered by a bank-side settlement line — render it in
+      // the list but skip it in the cycle-banner sum reducers below.
+      excludedFromTotals: schema.transactions.excludedFromTotals,
+      // Per-row computed flag: this row is a bank-side settlement line
+      // (the canonical "₪41K Diners" row that pays for a whole CC cycle).
+      // Used to filter the LIST visually based on the ccView toggle,
+      // WITHOUT removing the row from the data set — so the cycle-banner
+      // sum reducers can still count it. This preserves the math invariant:
+      // both ccView modes produce the same headline total.
+      isSettlementLine: sql<boolean>`(${isSettlementLineExpr()})`.as('is_settlement_line'),
       // Per-row "include in monthly" override (capex/opex split for project
       // transactions). When true, project rows are kept in monthly views
       // even though their project is excluded.
@@ -196,6 +270,12 @@ export default async function TransactionsPage(props: {
         eq(schema.recurringPatterns.status, 'active'),
       ),
     )
+    // JOIN accounts — needed for the Phase 6 settlement-line detection
+    // (isSettlementLineExpr filters on account.type = 'bank').
+    .leftJoin(
+      schema.accounts,
+      eq(schema.transactions.accountId, schema.accounts.id),
+    )
     .where(
       and(
         eq(schema.transactions.householdId, householdId),
@@ -204,12 +284,21 @@ export default async function TransactionsPage(props: {
         // Hide transactions tagged to a project with excludeFromMonthlyTotals=true.
         // Those live on /projects/[id] only; mixing them into the regular monthly
         // view would drown out everyday spending with one-off ₪200K transfers.
-        excludeHiddenProjectTxns(),
+        projectFilter,
         // View-tab filter — limit to the accounts visible in the current
         // view (personal / business / combined).
         accountFilter !== null
           ? inArray(schema.transactions.accountId, accountFilter)
           : undefined,
+        // Hide transfer rows by default. These are CC settlements + manually
+        // marked cross-account transfers — real bank movements but not real
+        // expenses. The toggle in the page header lets the user surface them.
+        showTransfers ? undefined : eq(schema.transactions.isTransfer, false),
+        // ccView filtering is NOT applied at the WHERE level — settlement
+        // lines (counted) and CC details (excluded but still data) must
+        // BOTH stay in the data set so the cycle-banner sum reducers can
+        // see them. The list rendering filters them visually based on the
+        // ccView toggle. See the txnsForList computation below.
         or(
           // All transactions dated in this calendar month (days 1–end, any billing month)
           and(
@@ -225,6 +314,75 @@ export default async function TransactionsPage(props: {
       ),
     )
     .orderBy(desc(schema.transactions.transactionDate));
+
+  // Count how many transfer rows exist in the same window — drives the
+  // "(N hidden)" label on the toggle so the user knows there's something there.
+  const hiddenTransfersCountQuery = db
+    .select({ n: sql<string>`count(*)` })
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.householdId, householdId),
+        isNull(schema.transactions.deletedAt),
+        eq(schema.transactions.isProjected, false),
+        eq(schema.transactions.isTransfer, true),
+        projectFilter,
+        accountFilter !== null
+          ? inArray(schema.transactions.accountId, accountFilter)
+          : undefined,
+        or(
+          and(
+            gte(schema.transactions.transactionDate, monthStart),
+            lte(schema.transactions.transactionDate, monthEnd),
+          ),
+          and(
+            eq(schema.transactions.billingMonth, month),
+            lt(schema.transactions.transactionDate, monthStart),
+          ),
+        ),
+      ),
+    );
+
+  // (Cycle breakdown for the info modal is computed in JS further down,
+  // iterating the SAME currentCycleTxns/nextCycleTxns rows the headline
+  // sumExp/sumInc reducers iterate. This guarantees the breakdown buckets
+  // sum exactly to the headline — no server-vs-JS source-of-truth gap,
+  // and projected installment rows (synthesized in JS) participate in
+  // the breakdown the same way they do in the headline.)
+
+  // Phase 6 — count what the OPPOSITE ccView mode would show that the
+  // current mode is hiding. Drives the badge on the CcViewToggle.
+  //
+  // settlement mode → counts CC details (excluded_from_totals=true) currently hidden
+  // details mode    → counts settlement lines (bank+CC pattern) currently hidden
+  const hiddenCcCountQuery = db
+    .select({ n: sql<string>`count(*)` })
+    .from(schema.transactions)
+    .leftJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
+    .where(
+      and(
+        eq(schema.transactions.householdId, householdId),
+        isNull(schema.transactions.deletedAt),
+        eq(schema.transactions.isProjected, false),
+        projectFilter,
+        accountFilter !== null
+          ? inArray(schema.transactions.accountId, accountFilter)
+          : undefined,
+        ccView === 'settlement'
+          ? eq(schema.transactions.excludedFromTotals, true)
+          : isSettlementLineExpr(),
+        or(
+          and(
+            gte(schema.transactions.transactionDate, monthStart),
+            lte(schema.transactions.transactionDate, monthEnd),
+          ),
+          and(
+            eq(schema.transactions.billingMonth, month),
+            lt(schema.transactions.transactionDate, monthStart),
+          ),
+        ),
+      ),
+    );
 
   // ── Projected installment payments ────────────────────────────────────────
   //
@@ -261,8 +419,16 @@ export default async function TransactionsPage(props: {
         : undefined,
     ));
 
-  // Resolve both reads concurrently.
-  const [txns, activePlans] = await Promise.all([txnsQuery, activePlansQuery]);
+  // Resolve all reads concurrently.
+  const [txns, activePlans, hiddenTransfersCountRows, hiddenCcCountRows] = await Promise.all([
+    txnsQuery,
+    activePlansQuery,
+    hiddenTransfersCountQuery,
+    hiddenCcCountQuery,
+  ]);
+  const hiddenTransfersCount = Number(hiddenTransfersCountRows[0]?.n ?? 0);
+  const hiddenCcCount = Number(hiddenCcCountRows[0]?.n ?? 0);
+  // (cycleBreakdown is computed in JS further down — see buildBreakdown.)
 
   // Look up the most-recent real transaction per plan so the projected
   // row can inherit its category (one less unknown for the user).
@@ -328,6 +494,11 @@ export default async function TransactionsPage(props: {
         importCreatedAt:  null,
         projectId:        null,
         isTransfer:       false,
+        excludedFromTotals: false,
+        // Synthesized projection rows are never settlement lines (those
+        // come from bank statements; projections are forward-looking
+        // installment forecasts).
+        isSettlementLine: false,
         includeInMonthlyOverride: false,
       });
     }
@@ -339,10 +510,21 @@ export default async function TransactionsPage(props: {
   // that flag to the row type extension below.
   const txnsWithProjections = [...txns, ...projectedTxns];
 
+  // ── ccView render-time filter ─────────────────────────────────────────────
+  // The cycle banner sum reducers run on the FULL set above (so settlement
+  // lines, CC details, etc. all stay accounted for). The user-visible LIST
+  // filters per the toggle:
+  //   • settlement (default) → hide CC details (excluded_from_totals=true)
+  //   • details              → hide bank-side settlement lines (isSettlementLine)
+  // Same total either way — only what's visible changes.
+  const txnsForList = txnsWithProjections.filter((t) => {
+    if (ccView === 'settlement') return !t.excludedFromTotals;
+    /* details */ return !t.isSettlementLine;
+  });
+
   // ── Cycle metadata ────────────────────────────────────────────────────────
-  const range = billingCycleRange(month, 10);
-  const cycleChargeDate     = range?.end ?? `${month}-10`;   // e.g. "2026-05-10"
-  const nextCycleChargeDate = `${addMonth(month, 1)}-10`;    // e.g. "2026-06-10"
+  // (cycleChargeDate + nextCycleChargeDate already computed at line ~125
+  // because the breakdown query needs them before this point.)
   const todayStr            = new Date().toISOString().slice(0, 10);
   const isCycleCharged      = cycleChargeDate <= todayStr;
   const daysUntilCharge     = isCycleCharged
@@ -365,15 +547,83 @@ export default async function TransactionsPage(props: {
     (t) => String(t.date) > cycleChargeDate,
   );
 
+  // Sum reducers skip rows where excluded_from_totals=true (CC detail rows
+  // covered by their bank-side settlement) and rows where is_transfer=true
+  // (cross-account transfers). The cycle banner totals always reflect the
+  // settlement-basis truth regardless of which rows are visible in the list.
   const sumExp = (rows: typeof txns) =>
-    rows.reduce((s, t) => (Number(t.amount) < 0 ? s + Math.abs(Number(t.amount)) : s), 0);
+    rows.reduce(
+      (s, t) =>
+        t.excludedFromTotals || t.isTransfer
+          ? s
+          : Number(t.amount) < 0 ? s + Math.abs(Number(t.amount)) : s,
+      0,
+    );
   const sumInc = (rows: typeof txns) =>
-    rows.reduce((s, t) => (Number(t.amount) >= 0 ? s + Number(t.amount) : s), 0);
+    rows.reduce(
+      (s, t) =>
+        t.excludedFromTotals || t.isTransfer
+          ? s
+          : Number(t.amount) >= 0 ? s + Number(t.amount) : s,
+      0,
+    );
 
   const curExpenses  = sumExp(currentCycleTxns);
   const curIncome    = sumInc(currentCycleTxns);
   const nextExpenses = sumExp(nextCycleTxns);
   const nextIncome   = sumInc(nextCycleTxns);
+  // Cycle row counts use the SAME filter the reducers do — so "29 עסקאות"
+  // means "29 rows that contributed to the displayed totals", not "29
+  // including hidden settlement-basis duplicates".
+  const cycleCountFilter = (t: typeof txns[number]) => !t.isTransfer && !t.excludedFromTotals;
+  const curCount  = currentCycleTxns.filter(cycleCountFilter).length;
+  const nextCount = nextCycleTxns.filter(cycleCountFilter).length;
+
+  // ── Breakdown buckets — JS-side computation ───────────────────────────────
+  // CRITICAL: iterate the SAME rows the sumExp/sumInc reducers iterate
+  // (currentCycleTxns / nextCycleTxns, which include synthesized projected
+  // installment rows). This guarantees the breakdown buckets always sum
+  // exactly to the headline — no server-vs-JS source-of-truth gap.
+  function buildBreakdown(rows: typeof currentCycleTxns) {
+    const b = {
+      regularExpN: 0, regularExpSum: 0,
+      settlementN: 0, settlementSum: 0,
+      forexN:      0, forexSum:      0,
+      excludedCcN: 0, excludedCcSum: 0,
+      transferN:   0, transferSum:   0,
+      incomeN:     0, incomeSum:     0,
+    };
+    for (const t of rows) {
+      const amt = Number(t.amount);
+      const abs = Math.abs(amt);
+      // Mutually exclusive bucketing (same precedence the headline uses)
+      if (t.isTransfer) {
+        b.transferN++; b.transferSum += abs;
+        continue;
+      }
+      if (t.excludedFromTotals) {
+        b.excludedCcN++; b.excludedCcSum += abs;
+        continue;
+      }
+      if (amt < 0) {
+        const isForex = t.originalCurrency != null && t.originalCurrency !== 'ILS';
+        if (t.isSettlementLine) {
+          b.settlementN++; b.settlementSum += abs;
+        } else if (isForex) {
+          b.forexN++; b.forexSum += abs;
+        } else {
+          b.regularExpN++; b.regularExpSum += abs;
+        }
+      } else if (amt > 0) {
+        b.incomeN++; b.incomeSum += amt;
+      }
+    }
+    return b;
+  }
+  const cycleBreakdown = {
+    current: buildBreakdown(currentCycleTxns),
+    next:    buildBreakdown(nextCycleTxns),
+  };
 
   // Navigation
   const prevMonth       = addMonth(month, -1);
@@ -417,9 +667,10 @@ export default async function TransactionsPage(props: {
           <ViewTabs
             current={view}
             hrefs={{
-              combined: `/transactions?view=combined&month=${month}`,
-              personal: `/transactions?view=personal&month=${month}`,
-              business: `/transactions?view=business&month=${month}`,
+              combined:  `/transactions?view=combined&month=${month}`,
+              personal:  `/transactions?view=personal&month=${month}`,
+              business:  `/transactions?view=business&month=${month}`,
+              household: `/transactions?view=household&month=${month}`,
             }}
           />
           <MonthSwitcher
@@ -430,6 +681,10 @@ export default async function TransactionsPage(props: {
             label={cycleLabel}
             activeMonth={activeBillingMonth(10)}
           />
+          {/* The two toggles (showTransfers, ccView) used to live here in
+              the page header. They moved DOWN into the TransactionsFilter
+              row so all list-affecting controls sit on one band, and the
+              header stays focused on view + month navigation. */}
         </div>
       </header>
 
@@ -524,15 +779,17 @@ export default async function TransactionsPage(props: {
         daysUntil={daysUntilCharge}
         curExpenses={curExpenses}
         curIncome={curIncome}
-        curCount={currentCycleTxns.length}
+        curCount={curCount}
+        curBreakdown={cycleBreakdown.current}
         nextCycleChargeDate={nextCycleChargeDate}
         nextExpenses={nextExpenses}
         nextIncome={nextIncome}
-        nextCount={nextCycleTxns.length}
+        nextCount={nextCount}
+        nextBreakdown={cycleBreakdown.next}
       />
 
       <TransactionsList
-        transactions={txnsWithProjections.map((t) => ({
+        transactions={txnsForList.map((t) => ({
           id: t.id,
           date: t.date,
           chargeDate: t.chargeDate,
@@ -574,6 +831,15 @@ export default async function TransactionsPage(props: {
         cycleChargeDate={cycleChargeDate}
         nextCycleChargeDate={nextCycleChargeDate}
         nextMonth={nextMonth}
+        txnIdsWithNotifications={Array.from(txnIdsWithNotifications)}
+        notificationContacts={notificationContacts}
+        filterExtraControls={
+          <>
+            <ShowTransfersToggle active={showTransfers} hiddenCount={hiddenTransfersCount} />
+            <CcViewToggle active={ccView === 'details'} hiddenCount={hiddenCcCount} />
+            <TransactionsExportButton billingMonth={month} />
+          </>
+        }
       />
     </div>
   );
@@ -583,17 +849,68 @@ export default async function TransactionsPage(props: {
 
 // ── DualCycleBanner ───────────────────────────────────────────────────────────
 
+interface CycleBreakdown {
+  regularExpN: number; regularExpSum: number;
+  settlementN: number; settlementSum: number;
+  forexN: number; forexSum: number;
+  excludedCcN: number; excludedCcSum: number;
+  transferN: number; transferSum: number;
+  incomeN: number; incomeSum: number;
+}
+
 function DualCycleBanner({
   cycleChargeDate, cycleCharged, daysUntil,
-  curExpenses, curIncome, curCount,
-  nextCycleChargeDate, nextExpenses, nextIncome, nextCount,
+  curExpenses, curIncome, curCount, curBreakdown,
+  nextCycleChargeDate, nextExpenses, nextIncome, nextCount, nextBreakdown,
 }: {
   cycleChargeDate: string; cycleCharged: boolean; daysUntil: number;
-  curExpenses: number; curIncome: number; curCount: number;
-  nextCycleChargeDate: string; nextExpenses: number; nextIncome: number; nextCount: number;
+  curExpenses: number; curIncome: number; curCount: number; curBreakdown: CycleBreakdown;
+  nextCycleChargeDate: string; nextExpenses: number; nextIncome: number; nextCount: number; nextBreakdown: CycleBreakdown;
 }) {
   if (curCount + nextCount === 0) return null;
   const fmtDate = (d: string) => formatShortDateHe(d);
+  const fmtIls = (n: number) => formatIls(n, { decimals: false });
+
+  // Build a row-level breakdown for the info modal. Tells the user EXACTLY
+  // which rows contributed to the cycle's expense total and which rows
+  // were excluded. Critical for "validate the math" / debug-confidence.
+  function buildBreakdownText(label: string, chargeDate: string, b: CycleBreakdown, expenses: number, income: number): string {
+    return `─── חישוב מפורט עבור ${label} (${fmtDate(chargeDate)}) ───
+
+הוצאות (${fmtIls(expenses)}) = סכום של:
+  • ${b.regularExpN} תנועות בנק רגילות: ${fmtIls(b.regularExpSum)}
+  • ${b.settlementN} חיובי כרטיס אשראי מצרפיים בעו״ש: ${fmtIls(b.settlementSum)}
+  • ${b.forexN} תנועות במטבע זר (CC, חיוב מיידי): ${fmtIls(b.forexSum)}
+
+הכנסות (${fmtIls(income)}) = ${b.incomeN} תנועות נכנסות
+
+לא נכלל בחישוב:
+  • ${b.excludedCcN} שורות פירוט אשראי (${fmtIls(b.excludedCcSum)}) — מכוסות על ידי שורת חיוב מצרפי בבנק
+  • ${b.transferN} העברות בין חשבונות (${fmtIls(b.transferSum)}) — לא מייצגות הוצאה אמיתית`;
+  }
+
+  // Explanations for the "i" icons. Centralized here so the wording stays
+  // consistent and matches the actual math in page.tsx (lines ~398-418).
+  const currentInfo = `מה זה: סיכום למחזור החיוב הנוכחי — מה שיירד מחשבון הבנק בתאריך ${fmtDate(cycleChargeDate)}.
+
+איך מחשבים:
+• כוללים את כל התנועות שתאריך הביצוע שלהן ≤ ${fmtDate(cycleChargeDate)} — כולל ה"גרירה" מהחודש הקודם.
+• הוצאות = סכום ה|סכומים השליליים| (יציאות מהחשבון), לא כולל פירוטי אשראי שמכוסים על ידי שורת חיוב מצרפי.
+• הכנסות = סכום הסכומים החיוביים.
+
+${buildBreakdownText('המחזור הנוכחי', cycleChargeDate, curBreakdown, curExpenses, curIncome)}
+
+מה לא כלול: העברות בין חשבונות (מוסתרות כברירת מחדל) ופרויקטים מוסתרים.
+
+⚠️ שים לב: בעמוד /insights החישוב מחמיר יותר (רק קטגוריות הכנסה נחשבות הכנסה).`;
+
+  const nextInfo = `מה זה: סיכום למחזור החיוב הבא — מה שיירד מחשבון הבנק בתאריך ${fmtDate(nextCycleChargeDate)}.
+
+איך מחשבים: תנועות שתאריך הביצוע שלהן > ${fmtDate(cycleChargeDate)} — שבוצעו אחרי תאריך החיוב של המחזור הנוכחי.
+
+${buildBreakdownText('המחזור הבא', nextCycleChargeDate, nextBreakdown, nextExpenses, nextIncome)}
+
+לשם מה: תחזית מה שיירד מהבנק בעוד כמה שבועות. עוזר לתכנן תזרים מזומנים.`;
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -608,6 +925,7 @@ function DualCycleBanner({
             ? <><CheckCircle2 className="size-4 shrink-0" /><span>חויב ב-{fmtDate(cycleChargeDate)}</span></>
             : <><Clock className="size-4 shrink-0" /><span>יחויב ב-{fmtDate(cycleChargeDate)}{daysUntil > 0 && <span className="ms-1 text-xs font-normal opacity-70">(עוד {daysUntil} {daysUntil === 1 ? 'יום' : 'ימים'})</span>}</span></>
           }
+          <InfoModalButton title={`מחזור חיוב — ${fmtDate(cycleChargeDate)}`} body={currentInfo} />
         </div>
         <div className="flex gap-3 tabular-nums text-xs text-muted-foreground">
           {curExpenses > 0 && <span>הוצאות: <strong className="text-foreground">{formatIls(curExpenses, { decimals: false })}</strong></span>}
@@ -622,6 +940,7 @@ function DualCycleBanner({
           <div className="flex items-center gap-1.5 font-medium text-blue-700 dark:text-blue-300">
             <CalendarClock className="size-4 shrink-0" />
             <span>חיוב הבא — {fmtDate(nextCycleChargeDate)}</span>
+            <InfoModalButton title={`מחזור חיוב הבא — ${fmtDate(nextCycleChargeDate)}`} body={nextInfo} />
           </div>
           <div className="flex gap-3 tabular-nums text-xs text-muted-foreground">
             {nextExpenses > 0 && <span>הוצאות: <strong className="text-foreground">{formatIls(nextExpenses, { decimals: false })}</strong></span>}

@@ -112,7 +112,8 @@ export function ProjectsList({ projects }: { projects: ProjectRow[] }) {
               <tr>
                 <th className="border-b px-3 py-2 font-medium">שם</th>
                 <th className="border-b px-3 py-2 font-medium">תקציב</th>
-                <th className="border-b px-3 py-2 font-medium">הוצא בפועל</th>
+                <th className="border-b px-3 py-2 font-medium">הוצאות</th>
+                <th className="border-b px-3 py-2 font-medium">מימון / הכנסה</th>
                 <th className="border-b px-3 py-2 font-medium">% מהתקציב</th>
                 <th className="border-b px-3 py-2 font-medium">תנועות</th>
                 <th className="border-b px-3 py-2 font-medium">סטטוס</th>
@@ -122,7 +123,9 @@ export function ProjectsList({ projects }: { projects: ProjectRow[] }) {
             <tbody>
               {projects.map((p) => {
                 const budget = p.totalBudgetIls ? Number(p.totalBudgetIls) : null;
-                const pct = budget && budget > 0 ? Math.round((p.totalSpent / budget) * 100) : null;
+                // % of budget compares EXPENSES to budget (income/funding
+                // doesn't consume the spending budget).
+                const pct = budget && budget > 0 ? Math.round((p.totalExpenses / budget) * 100) : null;
                 const overBudget = pct !== null && pct >= 100;
                 const nearBudget = pct !== null && pct >= 80 && pct < 100;
                 return (
@@ -153,7 +156,16 @@ export function ProjectsList({ projects }: { projects: ProjectRow[] }) {
                         : '—'}
                     </td>
                     <td className="px-3 py-2 tabular-nums font-medium">
-                      {formatIls(p.totalSpent, { decimals: false })}
+                      {formatIls(p.totalExpenses, { decimals: false })}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">
+                      {p.totalIncome > 0 ? (
+                        <span className="text-success font-medium">
+                          {formatIls(p.totalIncome, { decimals: false })}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       {pct !== null ? (

@@ -37,8 +37,17 @@ export interface ProjectRow {
   endDate:                  string | null;
   status:                   'active' | 'completed' | 'cancelled' | 'paused';
   excludeFromMonthlyTotals: boolean;
-  /** Aggregated stats from joined transactions */
-  totalSpent:               number;  // sum of |amount_ils| for project txns
+  // ── Sign-aware aggregations ──────────────────────────────────────────────
+  // Expenses = sum of ABS(amount) for negative txns (money out — vendor
+  //            payments, materials, etc.)
+  // Income   = sum of amount for positive txns (money in — mortgage
+  //            disbursements, grants, sale of materials, refunds, etc.)
+  // The legacy `totalSpent` is kept as an alias of totalExpenses so old
+  // callers don't break, but new code should use the explicit pair.
+  totalExpenses:            number;
+  totalIncome:              number;
+  /** @deprecated alias of totalExpenses — kept for backward compat. */
+  totalSpent:               number;
   txnCount:                 number;
 }
 
@@ -63,12 +72,29 @@ export async function listProjects(): Promise<ProjectRow[]> {
       // unambiguous in the OUTER query, but inside this correlated subquery
       // the inner table `t` (transaction) ALSO has an `id` column → unqualified
       // `"id"` resolves to `t.id` and the WHERE never matches anything.
-      totalSpent:               sql<number>`(
+      // Sign-aware: only NEGATIVE amounts (money OUT) count as expenses.
+      // POSITIVE amounts (mortgage disbursement, refunds, etc.) are
+      // funding/income — see totalIncome below.
+      // Both also skip rows flagged `excluded_from_totals` (loan
+      // refinancing, CC settlement lines, internal corrections — see the
+      // edit-transaction modal toggle).
+      totalExpenses:            sql<number>`(
         SELECT COALESCE(SUM(ABS(t.amount_ils::numeric)), 0)::numeric
         FROM ${schema.transactions} t
         WHERE t.project_id = "project"."id"
           AND t.deleted_at IS NULL
           AND t.is_projected = false
+          AND t.excluded_from_totals = false
+          AND t.amount_ils < 0
+      )`,
+      totalIncome:              sql<number>`(
+        SELECT COALESCE(SUM(t.amount_ils::numeric), 0)::numeric
+        FROM ${schema.transactions} t
+        WHERE t.project_id = "project"."id"
+          AND t.deleted_at IS NULL
+          AND t.is_projected = false
+          AND t.excluded_from_totals = false
+          AND t.amount_ils > 0
       )`,
       txnCount:                 sql<number>`(
         SELECT COUNT(*)::int FROM ${schema.transactions} t
@@ -81,15 +107,22 @@ export async function listProjects(): Promise<ProjectRow[]> {
     .where(eq(schema.projects.householdId, householdId))
     .orderBy(schema.projects.createdAt);
 
-  return rows.map((r) => ({
-    ...r,
-    status:                   r.status as ProjectRow['status'],
-    totalBudgetIls:           r.totalBudgetIls ? String(r.totalBudgetIls) : null,
-    startDate:                r.startDate ? String(r.startDate) : null,
-    endDate:                  r.endDate ? String(r.endDate) : null,
-    totalSpent:               Number(r.totalSpent ?? 0),
-    txnCount:                 Number(r.txnCount ?? 0),
-  }));
+  return rows.map((r) => {
+    const totalExpenses = Number(r.totalExpenses ?? 0);
+    const totalIncome   = Number(r.totalIncome ?? 0);
+    return {
+      ...r,
+      status:                   r.status as ProjectRow['status'],
+      totalBudgetIls:           r.totalBudgetIls ? String(r.totalBudgetIls) : null,
+      startDate:                r.startDate ? String(r.startDate) : null,
+      endDate:                  r.endDate ? String(r.endDate) : null,
+      totalExpenses,
+      totalIncome,
+      // Legacy alias — equals totalExpenses so old callers keep working.
+      totalSpent:               totalExpenses,
+      txnCount:                 Number(r.txnCount ?? 0),
+    };
+  });
 }
 
 interface ProjectFormInput {

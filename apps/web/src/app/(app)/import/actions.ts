@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import {
   getDb,
   schema,
@@ -1086,6 +1086,15 @@ function emptyResult(partial: Partial<ImportResult>): ImportResult {
 
 export interface BankExportImportResult {
   ok:                boolean;
+  /** When set, this file's hash matches an existing committed import_session.
+   *  The import did NOT run — the user needs to re-submit with force=1 to
+   *  bypass the warning. Populated by Phase 3.5 smart re-upload. */
+  duplicateFile?: {
+    sessionId:    string;
+    filename:     string;
+    importedAt:   string;          // ISO date
+    insertedRows: number;
+  };
   templateUsed:      { id: string; name: string } | null;
   inserted:          number;
   duplicates:        number;
@@ -1125,9 +1134,12 @@ export interface BankExportImportResult {
   /** Categories (parent or sub) auto-created from tagged-export hints. */
   categoriesCreated: number;
   /** Bank-statement rows where the merchant looks like a CC settlement
-   *  ("כ.א.ל חיוב", "דיינרס חיוב", etc.). Marked is_transfer = true so
-   *  they're excluded from cash-flow totals — the granular detail comes
-   *  from the matching CC excel file. Prevents double-counting. */
+   *  ("כ.א.ל חיוב", "דיינרס חיוב", etc.). Under the new
+   *  settlement-basis accounting (migration 0015) these rows are the
+   *  source of truth for monthly CC totals — they're COUNTED. The matching
+   *  CC detail rows get excluded_from_totals=true on import to prevent
+   *  double-counting. Older imports may still have the legacy is_transfer=true
+   *  flag set; Phase 4 (wipe + re-upload) corrects that. */
   ccSettlementsFlagged: number;
   /** True when the destination account was inferred from the file's
    *  identifier (no user pick needed). Surface in the UI so the user
@@ -1378,6 +1390,50 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   // smartImport extract gives us the file's identifier without needing
   // the account context.)
   const buffer = Buffer.from(await file.arrayBuffer());
+
+  // ── Phase 3.5 SMART RE-UPLOAD: pre-flight duplicate check ─────────────────
+  // Detect when the user uploads a file that's byte-identical to one she's
+  // already imported. The per-row dedup will skip every duplicate row anyway,
+  // so this is purely a UX warning — but a critical one. Without it the user
+  // re-uploads a file, sees "0 inserted, 200 duplicates" and wonders if
+  // something broke. With it, they see a clear "you've imported this exact
+  // file before; continue?" dialog and a deliberate decision to proceed.
+  //
+  // Bypass with FormData "force=1" — the client sets this when the user
+  // confirms the warning dialog.
+  const force = String(formData.get('force') ?? '') === '1';
+  const fileHashEarly = computeFileHash(buffer);
+  if (!force) {
+    const [prev] = await db
+      .select({
+        id:           schema.importSessions.id,
+        filename:     schema.importSessions.filename,
+        committedAt:  schema.importSessions.committedAt,
+        insertedCount: schema.importSessions.insertedCount,
+      })
+      .from(schema.importSessions)
+      .where(and(
+        eq(schema.importSessions.householdId, ctx.householdId),
+        eq(schema.importSessions.fileHash, fileHashEarly),
+        eq(schema.importSessions.status, 'committed'),
+      ))
+      .orderBy(desc(schema.importSessions.committedAt))
+      .limit(1);
+    if (prev) {
+      return empty(
+        `קובץ זה הועלה כבר ב-${prev.committedAt.toISOString().slice(0, 10)} (${prev.insertedCount} תנועות נוספו אז). אישור יבצע בכל מקרה ייבוא חוזר — שורות כפולות לא יידחסו פעמיים.`,
+        {
+          duplicateFile: {
+            sessionId:    prev.id,
+            filename:     prev.filename,
+            importedAt:   prev.committedAt.toISOString(),
+            insertedRows: prev.insertedCount,
+          },
+        },
+      );
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────────
   const isExcel = /\.(xlsx|xls)$/i.test(file.name);
   const parsedEarly = await smartImport(buffer, isExcel);
 
@@ -1469,6 +1525,30 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   }
 
   const distinctCards = extractDistinctCards(buffer);
+
+  // ── Create the import_session row UP FRONT so every transaction below can
+  // stamp itself with importSessionId. Without this row, the /admin/imports
+  // history page is empty AND "undo import" can't tell which rows came from
+  // which file. Was originally only created on the baseline path; bank-export
+  // imports (the most-used path) never wrote a session — leaving the history
+  // page empty even though hundreds of transactions had been imported.
+  // Counts are filled in at the end once we know inserted/duplicate totals. ──
+  const fileHash = computeFileHash(buffer);
+  const [importSession] = await db
+    .insert(schema.importSessions)
+    .values({
+      householdId:  ctx.householdId,
+      actorUserId:  ctx.userId,
+      filename:     file.name,
+      fileHash,
+      fileSize:     file.size,
+      accountId,
+      sourceType:   'raw_bank',
+      templateUsed: parsed.templateUsed?.id ?? null,
+      status:       'committed', // optimistic; flipped to 'failed' if insert blows up
+    })
+    .returning();
+  const importSessionId = importSession!.id;
 
   // ── Load household-level data needed by both the categorizer and the
   // installment auto-detector. Both run BEFORE any insert so we set the
@@ -1740,19 +1820,36 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     }
 
     // CC-settlement detection: when this row is on a BANK file AND the
-    // merchant name matches a CC-issuer pattern, mark as transfer so it
-    // doesn't double-count against the granular CC rows imported from
-    // the credit-card file. Examples:
-    //   • "כ.א.ל חיוב 15.18₪" on Discount checking → transfer (Cal will
-    //     ship the underlying ₪15.18 charge in its own file)
-    //   • "ויזה ק.ש.ר 142₪" on Leumi business → transfer
-    //   • "דיינרס חיוב 480₪" → transfer
+    // merchant name matches a CC-issuer pattern, this is the monthly
+    // settlement line that pays for a whole CC cycle.
+    //
+    // ── New "settlement-basis accounting" model (migration 0015) ──
+    // Settlement lines are now COUNTED in totals — they're the source of
+    // truth for non-forex CC spending. The CC detail rows (imported from
+    // the matching CC excel) get excluded_from_totals=TRUE instead, so the
+    // detail is preserved for category/recurring/installment logic but
+    // doesn't double-count.
+    //
+    // Old behavior (pre-0015): settlement line was is_transfer=true, CC
+    // details counted normally. Reversed in the new model.
     const isCcSettlement = isBankAccount && looksLikeCcSettlement(tx.merchantRaw);
     if (isCcSettlement) ccSettlementsFlagged++;
+
+    // Forex detection: a CC detail row whose original currency is NOT ILS
+    // (and not null). The bank charges these immediately and separately,
+    // so they're NOT bundled into the monthly settlement line — they ARE
+    // the source of truth for their own outflow and stay counted.
+    const isForexRow = tx.originalCurrency != null && tx.originalCurrency !== 'ILS';
+    // CC detail row (non-bank file, non-forex) → excluded_from_totals=true.
+    // The matching settlement line on the bank file is the canonical row.
+    const isNonForexCcDetail = !isBankAccount && !isForexRow;
 
     return {
       householdId: ctx.householdId,
       accountId,
+      // Stamp every row with the import session so /admin/imports can list
+      // the file and its rows can be reverted/restored together.
+      importSessionId,
       transactionDate: tx.transactionDate,
       chargeDate: tx.chargeDate,
       billingMonth,
@@ -1765,11 +1862,14 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       notes: tx.notes,
       isManual: false,
       isInstallment: !!installment,
-      // is_transfer fires from EITHER the tagged-export העברה flag OR
-      // the CC-settlement detector. Either way the row is excluded from
-      // cash-flow totals (the granular detail comes from the matching
-      // CC excel import).
-      ...(tx.isTransferHint || isCcSettlement ? { isTransfer: true } : {}),
+      // is_transfer ONLY from the tagged-export העברה flag now (e.g. the
+      // user's file explicitly said "this row is a transfer between my own
+      // accounts"). The CC-settlement check no longer flips this — see
+      // settlement-basis accounting note above.
+      ...(tx.isTransferHint ? { isTransfer: true } : {}),
+      // excluded_from_totals fires for non-forex CC detail rows so the
+      // matching bank-side settlement line is the only thing counted.
+      ...(isNonForexCcDetail ? { excludedFromTotals: true } : {}),
       ...(planId ? { installmentPlanId: planId } : {}),
       ...(ruleResult ? {
         categoryId:    ruleResult.categoryId,
@@ -1816,6 +1916,22 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
   // duplicates here — the installment_plan handles the missing
   // payments via the synthesized "צפוי" projection rows.
   // ───────────────────────────────────────────────────────────────────────
+  // Notes patterns that signal "this row is part of an installment plan"
+  // even when we couldn't link it to one yet (no matching plan in DB):
+  //   • "תשלום 2 מתוך 4"          ← Israeli CC explicit format
+  //   • "עסקה ב-3 תשלומי קרדיט"   ← Discount ביטוח לאומי format (the 3×₪2280 case)
+  //   • "תשלומים 2/4"             ← short variant
+  // When the bank double-lists every payment on day-1, those clones share
+  // the same externalId hash. Without this heuristic they'd get suffixed
+  // into N fake-distinct rows that inflate the budget.
+  const INSTALLMENT_NOTES_RE = /(תשלומי?\s*\d+|תשלום\s+\d+\s+מתוך\s+\d+|עסקה\s+ב-?\s*\d+\s+תשלומי)/;
+  const looksLikeInstallment = (row: typeof inserts[number]) => {
+    if ((row as { installmentPlanId?: string | null }).installmentPlanId) return true;
+    if ((row as { isInstallment?: boolean }).isInstallment) return true;
+    const notes = (row as { notes?: string | null }).notes;
+    return !!notes && INSTALLMENT_NOTES_RE.test(notes);
+  };
+
   const seenSeq = new Map<string, number>();
   const droppedInstallmentDups: number[] = [];
   for (let i = 0; i < inserts.length; i++) {
@@ -1824,12 +1940,13 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     const n = (seenSeq.get(base) ?? 0) + 1;
     seenSeq.set(base, n);
     if (n > 1) {
-      if ((row as { installmentPlanId?: string | null }).installmentPlanId) {
-        // Drop the duplicate — same plan/date/amount/merchant means the
-        // bank file double-listed the same payment; we keep the first.
+      if (looksLikeInstallment(row)) {
+        // Drop the duplicate — bank double-listed the same installment
+        // payment. Keep the first occurrence; the installment_plan row
+        // (existing or auto-created) handles the future-payment view.
         droppedInstallmentDups.push(i);
       } else {
-        // Not an installment — these ARE legitimate (two coffees, etc.)
+        // Not installment-shaped — these ARE legitimate (two coffees, etc.)
         // Suffix into the same 24-char slot to keep the unique-index happy.
         row.externalId = createHash('sha1').update(`${base}#${n}`).digest('hex').slice(0, 24);
       }
@@ -1921,24 +2038,110 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       }
     }
 
+    // ── Pass 4b: recompute occurrence_count + last_seen_month for ALL of
+    // the household's recurring patterns based on the actual transactions.
+    // Was previously stuck at 0 because nothing ever incremented it; the
+    // /recurring page's "הופעות" column always showed 0. One UPDATE … FROM
+    // (subquery) keeps this O(1 query) regardless of how many patterns exist.
+    await db.execute(sql`
+      UPDATE recurring_pattern rp
+      SET occurrence_count = sub.cnt,
+          last_seen_month  = sub.last_month
+      FROM (
+        SELECT t.merchant_normalized,
+               count(*)::int               AS cnt,
+               max(t.billing_month)        AS last_month
+        FROM transaction t
+        WHERE t.household_id = ${ctx.householdId}
+          AND t.deleted_at IS NULL
+          AND t.is_projected = false
+        GROUP BY t.merchant_normalized
+      ) sub
+      WHERE rp.household_id = ${ctx.householdId}
+        AND rp.merchant_normalized = sub.merchant_normalized
+    `);
+
     // ── Pass 5: cross-account transfer pairing.
     // When a transfer happens between two of the user's accounts (e.g.,
-    // Leumi → Discount), each side appears in its own bank file. We've
-    // already flagged each side as is_transfer = true via the tagged-export
-    // העברה column. Now we need to find pairs and link them via
-    // transfer_pair_id so they cancel out in cash-flow widgets.
+    // Leumi → Discount), each side appears in its own bank file. Some files
+    // pre-flag the transfer (tagged-export העברה column, CC-settlement
+    // pattern) but most don't — a "העברת משכורת" line in a generic bank
+    // export is just a regular transaction as far as the parser is concerned.
     //
-    // Pairing rules:
-    //   • both must be in the same household
-    //   • is_transfer = true on both
-    //   • both have transfer_pair_id IS NULL (don't double-pair)
-    //   • account_id MUST differ (same-account transfers don't make sense)
-    //   • amounts sum to ~0 (one positive, one negative, equal magnitude)
-    //   • dates within ±2 days (settlement delay)
+    // Two-stage pairing:
+    //   STAGE A — auto-detect from amount-mirror: scan unpaired non-transfer
+    //     rows for cross-account, sign-flipped, equal-magnitude, ±2-day
+    //     pairs. Flag both as is_transfer=true. Skips rows already linked
+    //     to an installment plan (those have their own structure) and
+    //     amounts ≤ ₪500 (avoid coincidental small-coffee matches).
+    //   STAGE B — link via transfer_pair_id: pair every is_transfer row
+    //     that's still unpaired (covers stage-A flags plus pre-flagged
+    //     tagged-export / CC-settlement rows).
     //
-    // We query all unpaired transfers for the household — not just this
-    // import — so a Leumi side imported today can pair with a Discount
-    // side imported yesterday. ────────────────────────────────────────────
+    // Both stages query the WHOLE household (not just this import) — the
+    // Leumi leg imported today can pair with a Discount leg from yesterday.
+    // ─────────────────────────────────────────────────────────────────────
+
+    // STAGE A: amount-mirror auto-flagging.
+    const TRANSFER_AMOUNT_FLOOR = 500; // ₪500 — anything smaller is too noisy
+    const TRANSFER_DATE_WINDOW_DAYS = 2;
+    const candidates = await db
+      .select({
+        id:              schema.transactions.id,
+        accountId:       schema.transactions.accountId,
+        transactionDate: schema.transactions.transactionDate,
+        amountIls:       schema.transactions.amountIls,
+        installmentPlanId: schema.transactions.installmentPlanId,
+        isTransfer:      schema.transactions.isTransfer,
+      })
+      .from(schema.transactions)
+      .where(and(
+        eq(schema.transactions.householdId, ctx.householdId),
+        eq(schema.transactions.isTransfer, false),
+        isNull(schema.transactions.transferPairId),
+        isNull(schema.transactions.deletedAt),
+        eq(schema.transactions.isProjected, false),
+      ));
+
+    const newlyFlaggedTransfers = new Set<string>();
+    const flaggedUsed = new Set<string>();
+    for (let i = 0; i < candidates.length; i++) {
+      const a = candidates[i]!;
+      if (flaggedUsed.has(a.id)) continue;
+      if (a.installmentPlanId) continue;
+      const aAmt = Number(a.amountIls);
+      if (Math.abs(aAmt) < TRANSFER_AMOUNT_FLOOR) continue;
+      let best: { id: string; daysDiff: number } | null = null;
+      for (let j = i + 1; j < candidates.length; j++) {
+        const b = candidates[j]!;
+        if (flaggedUsed.has(b.id)) continue;
+        if (b.installmentPlanId) continue;
+        if (b.accountId === a.accountId) continue;
+        const bAmt = Number(b.amountIls);
+        if (Math.abs(aAmt + bAmt) > 0.01) continue;
+        if (Math.sign(aAmt) === Math.sign(bAmt)) continue;
+        const daysDiff = Math.abs(
+          (new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()) / 86400000,
+        );
+        if (daysDiff > TRANSFER_DATE_WINDOW_DAYS) continue;
+        if (!best || daysDiff < best.daysDiff) best = { id: b.id, daysDiff };
+      }
+      if (best) {
+        newlyFlaggedTransfers.add(a.id);
+        newlyFlaggedTransfers.add(best.id);
+        flaggedUsed.add(a.id);
+        flaggedUsed.add(best.id);
+      }
+    }
+    if (newlyFlaggedTransfers.size > 0) {
+      await db
+        .update(schema.transactions)
+        .set({ isTransfer: true })
+        .where(inArray(schema.transactions.id, [...newlyFlaggedTransfers]));
+    }
+
+    // STAGE B: pair-linking. Re-fetch the full unpaired-transfer set after
+    // stage A's flips so newly-flagged rows are eligible.
     const unpaired = await db
       .select({
         id:              schema.transactions.id,
@@ -2117,11 +2320,38 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
       console.error('[import] auto-AI categorization failed:', err);
     }
 
+    // Patch the session row with final counts + the set of billing months
+    // it touched (drives the month-filter dropdown on /admin/imports).
+    const billingMonthsTouched = Array.from(
+      new Set(inserts.map((r) => r.billingMonth as string).filter(Boolean)),
+    ).sort();
+    await db
+      .update(schema.importSessions)
+      .set({
+        insertedCount:  inserted,
+        duplicateCount: duplicates + upgradedDuplicates,
+        errorCount:     parsed.errors.length,
+        billingMonths:  billingMonthsTouched,
+        summary: {
+          template:                  parsed.templateUsed?.id,
+          autoRouted,
+          transferPairsLinked,
+          newlyFlaggedAsTransfers:   newlyFlaggedTransfers.size,
+          ccSettlementsFlagged,
+          recurringPatternsCreated,
+          newPlansCreated,
+          rowsLinkedToPlans,
+          aiCategorized,
+        } as object,
+      })
+      .where(eq(schema.importSessions.id, importSessionId));
+
     await db.insert(schema.auditLog).values({
       householdId: ctx.householdId,
       actorUserId: ctx.userId,
       action: 'import',
-      entityType: 'transaction',
+      entityType: 'import_session',
+      entityId: importSessionId,
       afterJson: {
         source: 'bank-export',
         template: parsed.templateUsed?.id,
@@ -2137,6 +2367,7 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
         recurringPatternsCreated,
         transferRows: inserts.filter((i) => i.isTransfer === true).length,
         transferPairsLinked,
+        newlyFlaggedAsTransfers: newlyFlaggedTransfers.size,
         categoriesCreated,
         ccSettlementsFlagged,
         matchedExistingRecurring,
@@ -2187,6 +2418,12 @@ export async function importBankExport(formData: FormData): Promise<BankExportIm
     };
   }
 
+  // No usable rows produced — mark the session as failed so it doesn't
+  // dangle as a blank "0 inserted" success entry on /admin/imports.
+  await db
+    .update(schema.importSessions)
+    .set({ status: 'failed', errorCount: parsed.errors.length })
+    .where(eq(schema.importSessions.id, importSessionId));
   return empty('הקובץ לא הניב שורות תקינות', {
     templateUsed: { id: parsed.templateUsed!.id, name: parsed.templateUsed!.name },
     errors: parsed.errors,

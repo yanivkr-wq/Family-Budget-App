@@ -14,7 +14,7 @@
  */
 
 import { useState, useTransition } from 'react';
-import { Pencil, FolderMinus, CalendarCheck } from 'lucide-react';
+import { Pencil, FolderMinus, CalendarCheck, CircleSlash } from 'lucide-react';
 import { formatIls, formatShortDateHe } from '@fba/shared';
 import { EditTransactionModal } from '../../transactions/edit-modal';
 import { assignTransactionsToProject } from '../actions';
@@ -35,6 +35,10 @@ export interface ProjectTxn {
    *  totals despite the project's exclusion. true = visible in /, /transactions
    *  AND on this project page; false = project-only. */
   includeInMonthlyOverride: boolean;
+  /** "Accounting noise" — row stays visible but never counts in any
+   *  aggregation (project totals, monthly, insights). Used for loan
+   *  refinancing rows, CC settlement lines, internal corrections. */
+  excludedFromTotals: boolean;
 }
 
 interface Cat    { id: string; nameHe: string; color: string | null }
@@ -97,7 +101,15 @@ export function ProjectTxnsTable({
                 <tr
                   key={t.id}
                   id={`project-txn-row-${t.id}`}
-                  className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+                  className={`border-b last:border-0 transition-colors ${
+                    // Excluded rows are visually de-emphasized (italic +
+                    // reduced opacity) so the eye skips them when scanning
+                    // for "real" project spending. They're still hoverable
+                    // and editable.
+                    t.excludedFromTotals
+                      ? 'italic opacity-60 hover:opacity-100 hover:bg-muted/30'
+                      : 'hover:bg-muted/30'
+                  }`}
                 >
                   <td className="px-3 py-2 tabular-nums text-muted-foreground whitespace-nowrap">
                     {formatShortDateHe(t.date)}
@@ -112,6 +124,15 @@ export function ProjectTxnsTable({
                         >
                           <CalendarCheck className="size-2.5" />
                           גם חודשי
+                        </span>
+                      )}
+                      {t.excludedFromTotals && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                          title="תנועה חשבונאית בלבד — מוצגת לתיעוד אך לא נספרת בסיכומי הפרויקט או החודשיים"
+                        >
+                          <CircleSlash className="size-2.5" />
+                          לא נספרת
                         </span>
                       )}
                     </div>
@@ -136,8 +157,16 @@ export function ProjectTxnsTable({
                   <td className="px-3 py-2 text-muted-foreground text-xs">
                     {accName ?? '—'}
                   </td>
-                  <td className="px-3 py-2 tabular-nums font-semibold text-end">
-                    {formatIls(Math.abs(t.amount), { decimals: false })}
+                  <td className={`px-3 py-2 tabular-nums font-semibold text-end ${
+                    t.amount > 0 ? 'text-success' : ''
+                  }`}>
+                    {/* Signed display: negative = expense (no sign, magnitude
+                        only — matches the rest of the app's expense rendering),
+                        positive = income (with explicit + and green color so
+                        funding visually pops out from spending). */}
+                    {t.amount > 0
+                      ? `+${formatIls(t.amount, { decimals: false })}`
+                      : formatIls(Math.abs(t.amount), { decimals: false })}
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-end gap-1">
@@ -183,6 +212,7 @@ export function ProjectTxnsTable({
             notes:                    editing.notes,
             isTransfer:               editing.isTransfer,
             includeInMonthlyOverride: editing.includeInMonthlyOverride,
+            excludedFromTotals:       editing.excludedFromTotals,
             projectId,
           }}
           categories={categories}

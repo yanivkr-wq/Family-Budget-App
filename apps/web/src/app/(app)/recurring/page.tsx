@@ -1,7 +1,7 @@
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import { getDb, schema } from '@fba/db';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull, ne } from 'drizzle-orm';
 import { formatIls } from '@fba/shared';
 import { Repeat } from 'lucide-react';
 import { RecurringList } from './recurring-list';
@@ -15,7 +15,7 @@ export default async function RecurringPage() {
   const db = getDb();
   const { householdId } = session.user;
 
-  const [patterns, cats] = await Promise.all([
+  const [patterns, cats, patternIdsWithNotificationsRaw] = await Promise.all([
     db
       .select({
         id:                 schema.recurringPatterns.id,
@@ -30,6 +30,9 @@ export default async function RecurringPage() {
         occurrenceCount:    schema.recurringPatterns.occurrenceCount,
         lastSeenMonth:      schema.recurringPatterns.lastSeenMonth,
         status:             schema.recurringPatterns.status,
+        subscriptionEndDate: schema.recurringPatterns.subscriptionEndDate,
+        autoRenew:          schema.recurringPatterns.autoRenew,
+        cancelNoticeDays:   schema.recurringPatterns.cancelNoticeDays,
         notes:              schema.recurringPatterns.notes,
       })
       .from(schema.recurringPatterns)
@@ -40,7 +43,42 @@ export default async function RecurringPage() {
       .from(schema.categories)
       .where(eq(schema.categories.householdId, householdId))
       .orderBy(schema.categories.sortOrder),
+    // Recurring patterns that already have at least one (non-completed,
+    // non-cancelled) notification task attached. Drives the colored bell
+    // on each row so the user can see which subscriptions already have a
+    // reminder in place.
+    db
+      .select({ recurringPatternId: schema.notificationTasks.recurringPatternId })
+      .from(schema.notificationTasks)
+      .where(
+        and(
+          eq(schema.notificationTasks.householdId, householdId),
+          isNotNull(schema.notificationTasks.recurringPatternId),
+          ne(schema.notificationTasks.status, 'completed'),
+          ne(schema.notificationTasks.status, 'cancelled'),
+        ),
+      ),
   ]);
+  const patternIdsWithNotifications = Array.from(
+    new Set(
+      patternIdsWithNotificationsRaw
+        .map((r) => r.recurringPatternId)
+        .filter((id): id is string => id !== null),
+    ),
+  );
+
+  // Household contacts for the per-row "set reminder" modal recipient picker.
+  const notificationContacts = await db
+    .select({
+      id:        schema.notificationContacts.id,
+      label:     schema.notificationContacts.label,
+      phoneE164: schema.notificationContacts.phoneE164,
+      email:     schema.notificationContacts.email,
+      isDefault: schema.notificationContacts.isDefault,
+    })
+    .from(schema.notificationContacts)
+    .where(eq(schema.notificationContacts.householdId, householdId))
+    .orderBy(schema.notificationContacts.label);
 
   // Summary tiles — sums for "active" patterns only
   const active = patterns.filter((p) => p.status === 'active');
@@ -91,7 +129,12 @@ export default async function RecurringPage() {
         </div>
       )}
 
-      <RecurringList patterns={patterns} categories={cats} />
+      <RecurringList
+        patterns={patterns}
+        categories={cats}
+        patternIdsWithNotifications={patternIdsWithNotifications}
+        notificationContacts={notificationContacts}
+      />
     </div>
   );
 }

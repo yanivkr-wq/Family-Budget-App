@@ -3,12 +3,13 @@
 import { useEffect, useState, useTransition, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatIls } from '@fba/shared';
-import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2, Repeat, Briefcase } from 'lucide-react';
+import { Sparkles, Trash2, Pencil, Zap, Clock, CalendarClock, CreditCard, Settings2, Repeat, Briefcase, Bell, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { RuleModal } from './rule-modal';
 import { EditTransactionModal } from './edit-modal';
 import { RecurringModal, type RecurringPrefill } from '../recurring/recurring-modal';
 import { InstallmentModal, type InstallmentPrefill } from '../installments/installment-modal';
+import { NotificationModal, type NotificationModalSeed, type NotificationContactLite } from '../notifications/notification-modal';
 import { TransactionsFilter, emptyFilter, isFilterActive, type FilterState } from './transactions-filter';
 import { bulkDeleteTransactions, bulkApplyRule, bulkSetCategory } from './rule-actions';
 import { deleteTransaction } from './actions';
@@ -16,8 +17,11 @@ import { AssignToProjectMenu, type ProjectOption } from './assign-to-project-men
 import {
   ColumnsCustomizer,
   ColumnResizeHandle,
+  buildComparator,
   useColumnPrefs,
   type CellContext,
+  type ColumnId,
+  type SortState,
 } from './transactions-columns';
 
 interface Cat { id: string; nameHe: string; color?: string | null }
@@ -122,6 +126,19 @@ export function TransactionsList(props: {
   cycleChargeDate: string;     // current cycle charge date, e.g. "2026-05-10"
   nextCycleChargeDate: string; // next cycle charge date, e.g. "2026-06-10"
   nextMonth: string;           // next calendar month, e.g. "2026-06"
+  /**
+   * Transaction IDs that already have at least one (non-completed,
+   * non-cancelled) notification task attached. Drives the colored bell
+   * icon on each row so the user can see at a glance which txns already
+   * have a reminder set up. Comes through as an array (server → client
+   * payloads can't be Sets) and gets converted to a Set client-side.
+   */
+  txnIdsWithNotifications: string[];
+  /** Household notification contacts for the per-row "set reminder" modal. */
+  notificationContacts: NotificationContactLite[];
+  /** Page-level toggles slot — rendered at the end of the filter row. Keeps
+   *  the page header clean and groups all list-affecting controls together. */
+  filterExtraControls?: React.ReactNode;
 }) {
   const [selected, setSelected]         = useState<Set<string>>(new Set());
   const [ruleModalForId, setRuleModalForId] = useState<string | null>(null);
@@ -157,8 +174,74 @@ export function TransactionsList(props: {
   // (merchant name, amount, account). Saves the user from navigating
   // away to those pages just to add one entry.
   const [markRecurringPrefill, setMarkRecurringPrefill] = useState<RecurringPrefill | null>(null);
+  // Per-row "set reminder" — pre-fills the create-notification modal with
+  // this txn's merchant + date + amount so the user can attach a reminder
+  // (e.g. "remind me 3 days before this bill recurs").
+  const [notifySeed, setNotifySeed] = useState<NotificationModalSeed | null>(null);
+  // Which row triggered the notify modal — captured so we can mark that
+  // txn as "now has a notification" the moment the modal closes
+  // successfully (optimistic UI, no full page reload required).
+  const [notifyTxnId, setNotifyTxnId] = useState<string | null>(null);
+  // Live set of txn IDs that have at least one notification attached.
+  // Initialized from the server-supplied prop on first render; we mutate
+  // it when the user creates a new notification from the txn bell so the
+  // icon turns colored immediately.
+  const [txnsWithNotifications, setTxnsWithNotifications] = useState<Set<string>>(
+    () => new Set(props.txnIdsWithNotifications),
+  );
+  // Re-sync whenever the server prop changes (e.g. after a router refresh
+  // or a navigation back to /transactions). useState's initializer only
+  // runs on first mount, so we mirror to local state via effect.
+  useEffect(() => {
+    setTxnsWithNotifications(new Set(props.txnIdsWithNotifications));
+  }, [props.txnIdsWithNotifications]);
   const [markInstallmentPrefill, setMarkInstallmentPrefill] = useState<InstallmentPrefill | null>(null);
-  const [filter, setFilter]             = useState<FilterState>(emptyFilter);
+  // Initialize the filter from URL params so deep-links from /insights
+  // cards land on a pre-filtered list.
+  // Supported deep-link params:
+  //   ?text=foo            → merchant search box
+  //   ?categoryId=<uuid>   → category dropdown
+  //   ?accountId=<uuid>    → account dropdown
+  //   ?dateFrom=YYYY-MM-DD → date range start
+  //   ?dateTo=YYYY-MM-DD   → date range end
+  // After mount, the filter is purely client-state — URL changes from the
+  // user typing in the search box or picking a dropdown DON'T re-sync.
+  // (We could keep them in sync but it adds noise to the URL.)
+  const [filter, setFilter] = useState<FilterState>(() => {
+    if (typeof window === 'undefined') return emptyFilter;
+    const sp = new URLSearchParams(window.location.search);
+    return {
+      text:       sp.get('text')       ?? emptyFilter.text,
+      categoryId: sp.get('categoryId') ?? emptyFilter.categoryId,
+      accountId:  sp.get('accountId')  ?? emptyFilter.accountId,
+      sign:       (sp.get('sign')       as FilterState['sign']) ?? emptyFilter.sign,
+      flag:       (sp.get('flag')       as FilterState['flag']) ?? emptyFilter.flag,
+      dateFrom:   sp.get('dateFrom')   ?? emptyFilter.dateFrom,
+      dateTo:     sp.get('dateTo')     ?? emptyFilter.dateTo,
+    };
+  });
+  // Re-sync filter from URL when searchParams change WITHOUT a remount —
+  // happens when the user clicks an /insights drill-down from another
+  // /transactions tab/window or uses browser back/forward. The useState
+  // initializer only fires on first mount so without this, the filter
+  // would stick at the original deep-link values.
+  useEffect(() => {
+    // Only resync when there's at least one filter-shaped param in the URL,
+    // otherwise we'd wipe the filter every time the user opens a row's
+    // edit modal (which mutates other URL state).
+    const hasFilterParam = ['text','categoryId','accountId','sign','flag','dateFrom','dateTo']
+      .some((k) => searchParams.get(k) !== null);
+    if (!hasFilterParam) return;
+    setFilter({
+      text:       searchParams.get('text')       ?? emptyFilter.text,
+      categoryId: searchParams.get('categoryId') ?? emptyFilter.categoryId,
+      accountId:  searchParams.get('accountId')  ?? emptyFilter.accountId,
+      sign:       (searchParams.get('sign')       as FilterState['sign']) ?? emptyFilter.sign,
+      flag:       (searchParams.get('flag')       as FilterState['flag']) ?? emptyFilter.flag,
+      dateFrom:   searchParams.get('dateFrom')   ?? emptyFilter.dateFrom,
+      dateTo:     searchParams.get('dateTo')     ?? emptyFilter.dateTo,
+    });
+  }, [searchParams]);
   const [bulkCatId, setBulkCatId]       = useState('');
   const [bulkRuleId, setBulkRuleId]     = useState('');
   const [isPending, startTransition]    = useTransition();
@@ -169,6 +252,22 @@ export function TransactionsList(props: {
   // and trailing actions cells are NOT customizable; they're always-on
   // bookends rendered explicitly below.
   const { prefs: colPrefs, visibleColumns, setOrder: setColOrder, setVisible: setColVisible, setWidth: setColWidth, reset: resetCols } = useColumnPrefs();
+
+  // Sort state for the table headers. Tri-state per column:
+  //   1st click on a fresh column → asc
+  //   2nd click (same column)     → desc
+  //   3rd click (same column)     → off (back to natural date-desc order)
+  // Sort applies WITHIN each section (immediate / current cycle / etc.)
+  // — sections themselves stay grouped, which preserves the dashboard's
+  // mental model of "this row is in this billing cycle".
+  const [sort, setSort] = useState<SortState>({ columnId: null, dir: 'desc' });
+  function onHeaderClick(id: ColumnId) {
+    setSort((prev) => {
+      if (prev.columnId !== id)         return { columnId: id, dir: 'asc' };
+      if (prev.dir === 'asc')           return { columnId: id, dir: 'desc' };
+      return { columnId: null, dir: 'desc' }; // off
+    });
+  }
 
   // colSpan for full-width rows (section headers, "no transactions" message).
   // = visible data columns + 2 bookends (checkbox + actions).
@@ -193,7 +292,11 @@ export function TransactionsList(props: {
     const textLower = filter.text.toLowerCase();
     return props.transactions.filter((t) => {
       if (filter.text && !t.merchant.toLowerCase().includes(textLower)) return false;
-      if (filter.categoryId && t.categoryId !== filter.categoryId) return false;
+      if (filter.categoryId === 'none') {
+        if (t.categoryId != null) return false;
+      } else if (filter.categoryId && t.categoryId !== filter.categoryId) {
+        return false;
+      }
       if (filter.accountId && t.accountId !== filter.accountId) return false;
       if (filter.sign === 'expense' && t.amount >= 0) return false;
       if (filter.sign === 'income' && t.amount < 0) return false;
@@ -253,6 +356,7 @@ export function TransactionsList(props: {
         totalCount={props.transactions.length}
         filteredCount={visible.length}
         onChange={setFilter}
+        extraControls={props.filterExtraControls}
       />
 
       {props.transactions.length === 0 && (
@@ -339,13 +443,37 @@ export function TransactionsList(props: {
                 </th>
                 {visibleColumns.map((col) => {
                   const userWidth = colPrefs.widths[col.id];
+                  const sortable  = !!col.sortAccessor;
+                  const isSorted  = sort.columnId === col.id;
+                  // Pick the right indicator icon:
+                  //   active asc  → ▲
+                  //   active desc → ▼
+                  //   sortable    → ⇅ (faint, visible on hover)
+                  //   not sortable→ no icon
+                  const SortIcon = !sortable ? null
+                    : isSorted ? (sort.dir === 'asc' ? ChevronUp : ChevronDown)
+                    : ChevronsUpDown;
                   return (
                     <th
                       key={col.id}
-                      className={cn(col.headClass, 'relative')}
+                      className={cn(col.headClass, 'relative', sortable && 'group cursor-pointer select-none hover:bg-muted/60 transition-colors')}
                       style={userWidth ? { width: `${userWidth}px`, minWidth: `${userWidth}px`, maxWidth: `${userWidth}px` } : undefined}
+                      onClick={sortable ? () => onHeaderClick(col.id) : undefined}
+                      title={sortable ? `מיון לפי ${col.label} (לחץ שוב לשינוי כיוון)` : undefined}
+                      aria-sort={isSorted ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
                     >
-                      {col.label}
+                      <span className="inline-flex items-center gap-1">
+                        {col.label}
+                        {SortIcon && (
+                          <SortIcon
+                            className={cn(
+                              'size-3',
+                              isSorted ? 'text-accent' : 'text-muted-foreground/40 group-hover:text-muted-foreground/80',
+                            )}
+                            aria-hidden
+                          />
+                        )}
+                      </span>
                       <ColumnResizeHandle
                         onWidthChange={(next) => setColWidth(col.id, next)}
                         onReset={() => setColWidth(col.id, null)}
@@ -415,6 +543,54 @@ export function TransactionsList(props: {
                 const isCycleCharged     = props.cycleChargeDate <= todayStr;
                 const cycleDateLabel     = `${props.cycleChargeDate.slice(8, 10)}/${props.cycleChargeDate.slice(5, 7)}`;
                 const nextCycleDateLabel = `${props.nextCycleChargeDate.slice(8, 10)}/${props.nextCycleChargeDate.slice(5, 7)}`;
+
+                // ── Build the CellContext for sorting / rendering ─────────
+                // Same derivation as inside renderRow below, extracted so the
+                // sort comparator can use it without re-implementing the
+                // categorization-source logic.
+                const buildCellCtx = (t: Transaction, groupChargeDate: string): CellContext => {
+                  const cat    = t.categoryId    ? catMap.get(t.categoryId)    : null;
+                  const subCat = t.subCategoryId ? catMap.get(t.subCategoryId) : null;
+                  const acc    = accMap.get(t.accountId);
+                  const isImmediateRow = acc?.type === 'bank';
+                  const effectiveChargeDate = isImmediateRow ? null : (t.chargeDate ?? groupChargeDate);
+                  const isPendingCharge     = !isImmediateRow && !!effectiveChargeDate && effectiveChargeDate > todayStr;
+                  const chargeDateDiffersFromGroup =
+                    !isImmediateRow && !!t.chargeDate && t.chargeDate !== groupChargeDate;
+                  const isAutoRule        = t.categorySource === 'rule' && t.ruleSource === 'user';
+                  const isBankHint        = t.categorySource === 'bank_hint';
+                  const isMerchantKeyword = t.categorySource === 'merchant_keyword';
+                  const isTaggedExport    = t.categorySource === 'tagged_export';
+                  const isLlm             = t.categorySource === 'llm'
+                                          || (t.categorySource === 'rule' && t.ruleSource === 'llm_confirmed');
+                  const txIsManual        = t.isManual !== false;
+                  const isInstallment     = !!t.installmentPlanId;
+                  return {
+                    t,
+                    cat:    cat    ?? null,
+                    subCat: subCat ?? null,
+                    acc:    acc    ?? null,
+                    isInstallment, isAutoRule, isBankHint, isMerchantKeyword,
+                    isTaggedExport, isLlm, txIsManual,
+                    chargeDateDiffersFromGroup, isPendingCharge, effectiveChargeDate,
+                  };
+                };
+
+                // Apply the active sort to a single group's rows. Sort acts
+                // WITHIN each group — the immediate / current-cycle / etc.
+                // grouping itself is preserved. Returns the original array
+                // unchanged when no sort is active.
+                const comparator = buildComparator(sort);
+                const sortedSlice = (rows: Transaction[], groupChargeDate: string): Transaction[] => {
+                  if (!comparator) return rows;
+                  // Decorate-sort-undecorate: build CellContext once per row
+                  // for the comparator, sort the decorated array, then map
+                  // back to bare transactions.
+                  return rows
+                    .map((t) => ({ t, ctx: buildCellCtx(t, groupChargeDate) }))
+                    .sort((a, b) => comparator(a.ctx, b.ctx))
+                    .map((d) => d.t);
+                };
 
                 // ── Render a single transaction row ───────────────────────
                 // groupChargeDate: the charge date that applies to this group
@@ -598,6 +774,66 @@ export function TransactionsList(props: {
                               <Briefcase className="size-3.5" />
                             </button>
                           )}
+                          {/* Quick "set reminder" — opens the notification
+                              modal pre-filled with merchant/amount/date so
+                              the user can attach a reminder for this txn or
+                              its next occurrence. The bell turns SOLID
+                              accent-colored once the txn has at least one
+                              non-completed notification attached, so the
+                              user can see at a glance which rows are
+                              already covered. */}
+                          {(() => {
+                            const hasNotif = txnsWithNotifications.has(t.id);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNotifyTxnId(t.id);
+                                  setNotifySeed({
+                                    title:              `${t.merchant} · ${formatIls(Math.abs(t.amount), { decimals: false })}`,
+                                    description:        t.notes ?? null,
+                                    dueDate:            t.date,
+                                    status:             'active',
+                                    recurrence:         'none',
+                                    categoryId:         t.categoryId,
+                                    transactionId:      t.id,
+                                    recurringPatternId: null,
+                                    reminders: [
+                                      { offsetDays: 7, fireTime: '09:00', channels: { in_app: true, email: false, whatsapp: false }, enabled: true },
+                                      { offsetDays: 1, fireTime: '09:00', channels: { in_app: true, email: false, whatsapp: false }, enabled: true },
+                                    ],
+                                  });
+                                }}
+                                className={cn(
+                                  'rounded-md p-1.5',
+                                  hasNotif
+                                    // Active: filled accent background +
+                                    // accent foreground so it pops against
+                                    // the row.
+                                    ? 'bg-accent/15 text-accent hover:bg-accent/25'
+                                    // Inactive: faded foreground until hover.
+                                    : 'text-foreground/60 hover:text-accent hover:bg-accent/10',
+                                )}
+                                title={hasNotif
+                                  ? 'תזכורת קיימת — לחץ לעריכה / הוספה'
+                                  : 'הגדר תזכורת לתנועה זו'}
+                                aria-label="הגדר תזכורת"
+                                aria-pressed={hasNotif}
+                              >
+                                <Bell
+                                  className={cn(
+                                    'size-3.5',
+                                    // Filled style for the active state —
+                                    // the lucide Bell uses currentColor for
+                                    // both stroke and fill, so applying
+                                    // fill-current makes the icon look
+                                    // solid rather than outlined.
+                                    hasNotif && 'fill-current',
+                                  )}
+                                />
+                              </button>
+                            );
+                          })()}
                           <button type="button" onClick={() => deleteOne(t.id)} disabled={isPending} className="rounded-md p-1.5 text-destructive hover:bg-destructive/10" title="מחק">
                             <Trash2 className="size-3.5" />
                           </button>
@@ -686,7 +922,9 @@ export function TransactionsList(props: {
                           colorClass="text-success"
                           bgClass="bg-success/5 border-success/20"
                         />
-                        {immediateTxns.map((t) => renderRow(t, t.date))}
+                        {/* Pass each row's own date as group date for immediate rows
+                            since they're not part of a CC cycle. */}
+                        {sortedSlice(immediateTxns, props.cycleChargeDate).map((t) => renderRow(t, t.date))}
                       </>
                     )}
 
@@ -706,7 +944,7 @@ export function TransactionsList(props: {
                           colorClass="text-amber-700 dark:text-amber-400"
                           bgClass="bg-amber-50/40 border-amber-200/50 dark:bg-amber-900/10 dark:border-amber-800/30"
                         />
-                        {carryOver.map((t) => renderRow(t, props.cycleChargeDate))}
+                        {sortedSlice(carryOver, props.cycleChargeDate).map((t) => renderRow(t, props.cycleChargeDate))}
                       </>
                     )}
 
@@ -726,7 +964,7 @@ export function TransactionsList(props: {
                           colorClass={isCycleCharged ? 'text-success' : 'text-amber-700 dark:text-amber-400'}
                           bgClass={isCycleCharged ? 'bg-success/5 border-success/20' : 'bg-amber-50/60 border-amber-200/60 dark:bg-amber-900/10 dark:border-amber-800/40'}
                         />
-                        {currentCycle.map((t) => renderRow(t, props.cycleChargeDate))}
+                        {sortedSlice(currentCycle, props.cycleChargeDate).map((t) => renderRow(t, props.cycleChargeDate))}
                       </>
                     )}
 
@@ -744,7 +982,7 @@ export function TransactionsList(props: {
                           colorClass="text-blue-700 dark:text-blue-300"
                           bgClass="bg-blue-50/50 border-blue-200/50 dark:bg-blue-900/10 dark:border-blue-800/40"
                         />
-                        {nextCycle.map((t) => renderRow(t, props.nextCycleChargeDate))}
+                        {sortedSlice(nextCycle, props.nextCycleChargeDate).map((t) => renderRow(t, props.nextCycleChargeDate))}
                       </>
                     )}
                   </>
@@ -795,6 +1033,41 @@ export function TransactionsList(props: {
           prefill={markInstallmentPrefill}
           accounts={props.accounts.map((a) => ({ id: a.id, name: a.name }))}
           onClose={() => setMarkInstallmentPrefill(null)}
+        />
+      )}
+
+      {/* Per-row "set reminder" — opens the notification create modal seeded
+          with the txn's data and linked back to the txn id. The full
+          /notifications page lists everything created here. */}
+      {notifySeed && (
+        <NotificationModal
+          seed={notifySeed}
+          categories={props.categories.map((c) => ({ id: c.id, nameHe: c.nameHe }))}
+          contacts={props.notificationContacts}
+          // The modal expects a recent-transactions list for its dropdown.
+          // Hand it the txn we're attaching to so the dropdown isn't empty
+          // when launched from this surface.
+          recentTransactions={props.transactions
+            .slice(0, 100)
+            .map((t) => ({ id: t.id, merchant: t.merchant, amount: t.amount, date: t.date }))}
+          onSaved={() => {
+            // Optimistic UI: mark the row's bell as "active" the moment
+            // the save returns OK, so the user sees the colored bell on
+            // the same row they just acted on. The next page revalidate
+            // (revalidatePath('/notifications') was called server-side)
+            // confirms it on next nav.
+            if (notifyTxnId) {
+              setTxnsWithNotifications((prev) => {
+                const next = new Set(prev);
+                next.add(notifyTxnId);
+                return next;
+              });
+            }
+          }}
+          onClose={() => {
+            setNotifySeed(null);
+            setNotifyTxnId(null);
+          }}
         />
       )}
 

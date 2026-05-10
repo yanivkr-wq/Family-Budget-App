@@ -3,6 +3,7 @@ import { getDb, schema, activeBillingMonth, billingCycleRange } from '@fba/db';
 import { and, eq, isNull } from 'drizzle-orm';
 import { formatIls, formatMonthHe, formatShortDateHe, he } from '@fba/shared';
 import { excludeHiddenProjectTxns } from '@/lib/project-filter';
+import { readActiveMonth } from '@/lib/active-month';
 
 // Day-by-day × category grid.
 // Rows = every date in the billing cycle (cycle-start to cycle-end), not calendar days.
@@ -14,7 +15,8 @@ export default async function GridPage(props: {
   const session = await auth();
   const householdId = session!.user.householdId;
   const sp = await props.searchParams;
-  const month = sp.month ?? activeBillingMonth(10);
+  // Resolution: URL > fba_month cookie > activeBillingMonth(10).
+  const month = (await readActiveMonth(sp.month)) ?? activeBillingMonth(10);
   const db = getDb();
 
   // Compute the actual calendar date range for this billing cycle

@@ -37,6 +37,9 @@ export default async function HistoryPage() {
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
+        // Settlement-basis accounting: exclude CC detail rows covered by
+        // bank-side settlement. See cash-flow.ts in @fba/db.
+        eq(schema.transactions.excludedFromTotals, false),
         // Hide project-tagged txns so a multi-month construction project
         // doesn't make every month look like a cash-flow disaster.
         excludeHiddenProjectTxns(),

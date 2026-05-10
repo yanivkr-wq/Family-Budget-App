@@ -16,7 +16,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 
 type Category = 'bug' | 'ux' | 'feature' | 'other';
-type Status   = 'open' | 'in_progress' | 'resolved' | 'dismissed';
+type Status   = 'open' | 'in_progress' | 'pending_validation' | 'resolved' | 'dismissed';
 
 const CATEGORY_HE: Record<Category, string> = {
   bug:     'באג',
@@ -25,10 +25,11 @@ const CATEGORY_HE: Record<Category, string> = {
   other:   'אחר',
 };
 const STATUS_HE: Record<Status, string> = {
-  open:        'פתוח',
-  in_progress: 'בעבודה',
-  resolved:    'נפתר',
-  dismissed:   'נדחה',
+  open:               'פתוח',
+  in_progress:        'בעבודה',
+  pending_validation: 'ממתין לאימות',
+  resolved:           'נפתר',
+  dismissed:          'נדחה',
 };
 
 async function ctx() {
@@ -50,6 +51,12 @@ export async function createFeedback(formData: FormData): Promise<{ ok: boolean;
     if (!['bug', 'ux', 'feature', 'other'].includes(category)) {
       return { ok: false, error: 'קטגוריה לא תקינה' };
     }
+    // Screenshot is an optional base64 data URI (e.g. "data:image/png;base64,iVBORw...").
+    // Cap at ~5MB to keep DB rows manageable.
+    const screenshotRaw = String(formData.get('screenshotData') ?? '').trim();
+    const screenshotData = screenshotRaw && screenshotRaw.startsWith('data:image/') && screenshotRaw.length < 5_000_000
+      ? screenshotRaw
+      : null;
     await db.insert(schema.feedback).values({
       householdId,
       actorUserId: userId,
@@ -57,6 +64,7 @@ export async function createFeedback(formData: FormData): Promise<{ ok: boolean;
       message,
       pagePath:  String(formData.get('pagePath')  ?? '').trim() || null,
       userAgent: String(formData.get('userAgent') ?? '').trim() || null,
+      screenshotData,
     });
     revalidatePath('/admin/feedback');
     return { ok: true };
@@ -67,28 +75,32 @@ export async function createFeedback(formData: FormData): Promise<{ ok: boolean;
 }
 
 export interface FeedbackRow {
-  id:         string;
-  category:   Category;
-  message:    string;
-  pagePath:   string | null;
-  userAgent:  string | null;
-  status:     Status;
-  resolvedAt: string | null;
-  createdAt:  string;
+  id:             string;
+  category:       Category;
+  message:        string;
+  pagePath:       string | null;
+  userAgent:      string | null;
+  status:         Status;
+  /** Optional base64 PNG data URI captured via the camera button in the
+   *  feedback widget. NULL when feedback was submitted text-only. */
+  screenshotData: string | null;
+  resolvedAt:     string | null;
+  createdAt:      string;
 }
 
 export async function listFeedback(): Promise<FeedbackRow[]> {
   const { householdId, db } = await ctx();
   const rows = await db
     .select({
-      id:         schema.feedback.id,
-      category:   schema.feedback.category,
-      message:    schema.feedback.message,
-      pagePath:   schema.feedback.pagePath,
-      userAgent:  schema.feedback.userAgent,
-      status:     schema.feedback.status,
-      resolvedAt: schema.feedback.resolvedAt,
-      createdAt:  schema.feedback.createdAt,
+      id:             schema.feedback.id,
+      category:       schema.feedback.category,
+      message:        schema.feedback.message,
+      pagePath:       schema.feedback.pagePath,
+      userAgent:      schema.feedback.userAgent,
+      status:         schema.feedback.status,
+      screenshotData: schema.feedback.screenshotData,
+      resolvedAt:     schema.feedback.resolvedAt,
+      createdAt:      schema.feedback.createdAt,
     })
     .from(schema.feedback)
     .where(eq(schema.feedback.householdId, householdId))
@@ -102,11 +114,40 @@ export async function listFeedback(): Promise<FeedbackRow[]> {
   }));
 }
 
+export async function updateFeedback(
+  id: string,
+  message: string,
+  category: Category,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { householdId, db } = await ctx();
+    const trimmed = message.trim();
+    if (!trimmed) return { ok: false, error: 'נא להזין טקסט' };
+    if (!['bug', 'ux', 'feature', 'other'].includes(category)) {
+      return { ok: false, error: 'קטגוריה לא תקינה' };
+    }
+    await db
+      .update(schema.feedback)
+      .set({ message: trimmed, category })
+      .where(and(
+        eq(schema.feedback.id, id),
+        eq(schema.feedback.householdId, householdId),
+      ));
+    revalidatePath('/admin/feedback');
+    return { ok: true };
+  } catch (e) {
+    console.error('updateFeedback', e);
+    return { ok: false, error: e instanceof Error ? e.message : 'שגיאה' };
+  }
+}
+
 export async function setFeedbackStatus(id: string, status: Status): Promise<{ ok: boolean }> {
   const { householdId, db } = await ctx();
   await db
     .update(schema.feedback)
     .set({
+      // resolvedAt is only set on terminal states; pending_validation/in_progress
+      // shouldn't stamp it (the item isn't actually resolved yet).
       status,
       resolvedAt: (status === 'resolved' || status === 'dismissed') ? new Date() : null,
     })
@@ -138,7 +179,7 @@ export async function deleteFeedback(id: string): Promise<{ ok: boolean }> {
  * Optional `includeStatuses` lets the admin export resolved items too
  * (e.g., to keep a history of past fixes).
  */
-export async function exportFeedbackMarkdown(includeStatuses: Status[] = ['open', 'in_progress']): Promise<string> {
+export async function exportFeedbackMarkdown(includeStatuses: Status[] = ['open', 'in_progress', 'pending_validation']): Promise<string> {
   const { householdId, db } = await ctx();
   const rows = await db
     .select({

@@ -6,7 +6,10 @@ import { closeDb, getDb } from '@fba/db';
 import { registerHealthRoutes } from './routes/health';
 import { registerChatRoutes } from './routes/chat';
 import { registerScrapeRoutes } from './routes/scrape';
+import { registerNotificationRoutes } from './routes/notifications';
+import { registerBackupRoutes } from './routes/backups';
 import { registerCron } from './cron/index';
+import { checkEnvFiles } from './env-check';
 
 const config = loadConfig();
 
@@ -48,6 +51,13 @@ await db.execute('SELECT 1' as unknown as never).catch((err) => {
 await registerHealthRoutes(app);
 await registerChatRoutes(app, { config });
 await registerScrapeRoutes(app, { config });
+await registerNotificationRoutes(app, { config });
+await registerBackupRoutes(app, { config });
+
+// Sanity-check the .env files for the BOM / em-dash gotchas Notepad
+// introduces. Non-fatal — just warns. Fails silently in prod where the
+// .env files won't typically be Notepad-edited.
+checkEnvFiles(app.log);
 
 registerCron(app, { config });
 

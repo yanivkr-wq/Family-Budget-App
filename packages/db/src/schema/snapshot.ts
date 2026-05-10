@@ -39,7 +39,20 @@ export const anomalies = pgTable(
       .references(() => households.id, { onDelete: 'cascade' }),
     yearMonth: text().notNull(),
     kind: text({
-      enum: ['category_overspend', 'recurring_jump', 'income_drop', 'unusual_merchant'],
+      enum: [
+        // Spending anomalies (existing)
+        'category_overspend',
+        'recurring_jump',
+        'income_drop',
+        'unusual_merchant',
+        // Data integrity (added in 0014_insights_anomaly_kinds.sql for the
+        // /insights "אמינות הנתונים" section — insights 8a-8e in the spec)
+        'untagged',
+        'low_confidence_categorization',
+        'bad_installment',
+        'unpaired_transfer_candidate',
+        'bad_recurring_pattern',
+      ],
     }).notNull(),
     severity: text({ enum: ['low', 'medium', 'high'] })
       .notNull()

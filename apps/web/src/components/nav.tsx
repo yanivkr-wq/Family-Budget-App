@@ -3,8 +3,12 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Activity,
   BarChart3,
+  Bell,
   CalendarDays,
+  Database,
+  FileSpreadsheet,
   ListChecks,
   Repeat,
   Receipt,
@@ -44,6 +48,7 @@ const LINKS: NavLink[] = [
   { href: '/installments', label: he.nav.installments, icon: Receipt, group: 'main' },
   { href: '/projects', label: 'פרויקטים', icon: Briefcase, group: 'main' },
   { href: '/savings', label: he.nav.savings, icon: PiggyBank, group: 'main' },
+  { href: '/notifications', label: 'התראות', icon: Bell, group: 'main' },
   { href: '/insights', label: he.nav.insights, icon: Sparkles, group: 'main', mobile: true },
   { href: '/history', label: he.nav.history, icon: HistoryIcon, group: 'main' },
   { href: '/admin/categories', label: he.nav.categories, icon: Tags, group: 'admin' },
@@ -51,9 +56,13 @@ const LINKS: NavLink[] = [
   { href: '/admin/rules', label: he.nav.rules, icon: SettingsIcon, group: 'admin' },
   { href: '/admin/imports', label: 'היסטוריית ייבוא', icon: History, group: 'admin' },
   { href: '/admin/feedback', label: 'פידבק', icon: MessageSquare, group: 'admin' },
+  { href: '/admin/notifications', label: 'יומן התראות', icon: Activity, group: 'admin' },
+  { href: '/admin/export', label: 'ייצוא לאקסל', icon: FileSpreadsheet, group: 'admin' },
+  { href: '/admin/backups', label: 'גיבויים', icon: Database, group: 'admin' },
   { href: '/admin/audit', label: he.nav.audit, icon: ScrollText, group: 'admin' },
   { href: '/admin/rules-catalog', label: 'ספר החוקים', icon: ScrollText, group: 'admin' },
   { href: '/admin/privacy', label: 'יומן פרטיות', icon: Shield, group: 'admin' },
+  { href: '/settings/notifications', label: 'הגדרות התראות', icon: Bell, group: 'admin' },
   { href: '/settings/password', label: 'סיסמה', icon: KeyRound, group: 'admin' },
 ];
 

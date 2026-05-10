@@ -119,6 +119,14 @@ export interface ColumnDef {
   headClass?: string;
   cellClass?: string;
   renderCell: (ctx: CellContext) => ReactNode;
+  /**
+   * Returns the value used for sorting this column. Strings are compared
+   * via localeCompare (Hebrew-aware), numbers via subtraction, null is
+   * always sorted last regardless of direction. Define for every column
+   * that should be sortable; columns without a sortAccessor get a non-
+   * clickable header.
+   */
+  sortAccessor?: (ctx: CellContext) => string | number | null;
 }
 
 // ─── Column definitions ──────────────────────────────────────────────────────
@@ -132,6 +140,8 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top tabular-nums',
+    // ISO YYYY-MM-DD strings sort lexicographically = chronologically.
+    sortAccessor: ({ t }) => t.date,
     renderCell: ({ t, chargeDateDiffersFromGroup, isPendingCharge, effectiveChargeDate }) => (
       <>
         <div>{formatDateHe(t.date)}</div>
@@ -154,6 +164,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
+    sortAccessor: ({ t }) => t.merchant,
     // Merchant text + small inline badges for cross-cutting concerns:
     //   • forex (original currency + amount)
     //   • cross-account transfer (paired with another row)
@@ -210,6 +221,13 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
+    // Sort priority: installments first (most specific), then recurring,
+    // then unmarked. Numeric ordering keeps the categories grouped when
+    // sorted asc.
+    sortAccessor: ({ t, isInstallment }) =>
+      isInstallment ? 0 :
+      t.recurringPatternId ? 1 :
+      2,
     renderCell: ({ t, isInstallment }) => {
       // Installment + recurring are mutually exclusive — installments take
       // precedence as the more specific signal (they end after N payments).
@@ -258,6 +276,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top text-muted-foreground',
+    sortAccessor: ({ acc }) => acc?.name ?? null,
     renderCell: ({ acc }) => <>{acc?.name ?? '—'}</>,
   },
 
@@ -267,6 +286,10 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-middle',
+    // 0 = manual, 1 = imported. Manual usually means user-curated
+    // (intentional edits) so it's "more important" — comes first when
+    // sorted ascending.
+    sortAccessor: ({ txIsManual }) => (txIsManual ? 0 : 1),
     // Imported rows show the import session's filename + date in the
     // hover tooltip so the user can trace each row back to its upload.
     renderCell: ({ txIsManual, t }) => {
@@ -302,6 +325,9 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-top',
+    // Sort by category Hebrew name; uncategorized rows go last
+    // (sortAccessor returning null pushes to end regardless of dir).
+    sortAccessor: ({ cat }) => cat?.nameHe ?? null,
     // The rule / source badges that used to live here moved to their own
     // 'rule' column at the end of the table. Category column is now just
     // the colored pill + optional sub-category subtitle.
@@ -324,6 +350,10 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 text-right font-medium tabular-nums w-28 text-foreground/80',
     cellClass: 'px-3 py-2 text-right align-top tabular-nums',
+    // Expense column shows abs(amount) when amount < 0. For sorting we
+    // want "biggest expense first" when desc, so sort by abs(amount) for
+    // expense rows; income rows sort to the end (null).
+    sortAccessor: ({ t }) => (t.amount < 0 ? Math.abs(t.amount) : null),
     renderCell: ({ t }) => <>{t.amount < 0 ? formatIls(t.amount) : ''}</>,
   },
 
@@ -333,6 +363,9 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 text-right font-medium tabular-nums w-28 text-success',
     cellClass: 'px-3 py-2 text-right align-top tabular-nums text-success',
+    // Mirror of expense: only positive amounts contribute; expense rows
+    // sort to the end via null.
+    sortAccessor: ({ t }) => (t.amount >= 0 ? t.amount : null),
     renderCell: ({ t }) => <>{t.amount >= 0 ? formatIls(t.amount) : ''}</>,
   },
 
@@ -342,6 +375,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'max-w-xs truncate px-3 py-2 align-top text-muted-foreground',
+    sortAccessor: ({ t }) => t.notes ?? null,
     renderCell: ({ t }) => <span title={t.notes ?? ''}>{t.notes}</span>,
   },
 
@@ -351,6 +385,12 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     defaultVisible: true,
     headClass: 'border-b px-3 py-2 font-medium',
     cellClass: 'px-3 py-2 align-middle',
+    // Sort priority: user rule (most "owned"), tagged export, AI, none.
+    sortAccessor: ({ isAutoRule, isTaggedExport, isLlm }) =>
+      isAutoRule     ? 0 :
+      isTaggedExport ? 1 :
+      isLlm          ? 2 :
+                       3,
     // Compact source-of-categorization indicator:
     //   • User rule       → clickable "כלל" pill, hover shows rule name,
     //                       click navigates to /admin/rules?edit=<id>
@@ -410,6 +450,48 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
 };
 
 export const DEFAULT_ORDER: ColumnId[] = ['date', 'merchant', 'flag', 'account', 'source', 'category', 'expense', 'income', 'notes', 'rule'];
+
+// ─── Sorting ─────────────────────────────────────────────────────────────────
+
+/** Tri-state sort: column id + direction. `null` column = no sort applied
+ *  (rows fall back to the natural date-desc order from the server). */
+export type SortDir = 'asc' | 'desc';
+export interface SortState {
+  columnId: ColumnId | null;
+  dir:      SortDir;
+}
+
+/** Build a comparator function for the active sort state. Pass it to
+ *  Array.sort to order an array of CellContext values. Stable across
+ *  equal keys: callers should pre-sort by date desc to preserve a
+ *  meaningful tiebreaker.
+ *
+ *  Null accessor values always sort LAST regardless of direction —
+ *  matches the convention that "missing data" shouldn't crowd the top
+ *  of the user's view in either direction.
+ */
+export function buildComparator(sort: SortState): ((a: CellContext, b: CellContext) => number) | null {
+  if (!sort.columnId) return null;
+  const col = COLUMN_DEFS[sort.columnId];
+  const accessor = col.sortAccessor;
+  if (!accessor) return null;
+
+  const sign = sort.dir === 'asc' ? 1 : -1;
+
+  return (a, b) => {
+    const va = accessor(a);
+    const vb = accessor(b);
+    // Null handling: always last
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return (va - vb) * sign;
+    }
+    // String comparison — Hebrew-aware
+    return String(va).localeCompare(String(vb), 'he') * sign;
+  };
+}
 
 // ─── Hook: load/save user prefs from localStorage ────────────────────────────
 

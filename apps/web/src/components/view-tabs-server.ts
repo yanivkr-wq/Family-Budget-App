@@ -15,7 +15,7 @@ import { cookies } from 'next/headers';
 import type { View } from './view-tabs';
 
 const VIEW_COOKIE = 'fba_view';
-const VALID: View[] = ['combined', 'personal', 'business'];
+const VALID: View[] = ['combined', 'personal', 'business', 'household'];
 
 function isValidView(v: unknown): v is View {
   return typeof v === 'string' && VALID.includes(v as View);

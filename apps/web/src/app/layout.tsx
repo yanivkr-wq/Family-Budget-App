@@ -1,8 +1,7 @@
 import type { Metadata } from 'next';
 import { Heebo } from 'next/font/google';
-import { Suspense } from 'react';
 import { he } from '@fba/shared';
-import { NavigationProgress } from '@/components/navigation-progress';
+import { NavigationLoader } from '@/components/navigation-loader';
 import './globals.css';
 
 const heebo = Heebo({
@@ -27,10 +26,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         className="min-h-screen bg-background font-sans antialiased"
         suppressHydrationWarning
       >
-        {/* useSearchParams() inside NavigationProgress requires Suspense */}
-        <Suspense fallback={null}>
-          <NavigationProgress />
-        </Suspense>
+        {/* Click-driven full-screen overlay loader. Fires the moment the
+            user clicks an internal link, before the server roundtrip even
+            starts — eliminates the "I clicked but nothing happened" gap.
+            Falls away as soon as Next.js navigates to the new URL; if the
+            destination's loading.tsx then takes over, it's the same
+            <AppLoader>, so the user sees one continuous loader. */}
+        <NavigationLoader />
         {children}
       </body>
     </html>

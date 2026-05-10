@@ -22,6 +22,16 @@ export const users = pgTable(
     role: text({ enum: ['admin'] }).notNull().default('admin'),
     displayName: text(),
     locale: text({ enum: ['he', 'en'] }).notNull().default('he'),
+    /**
+     * Phone number in E.164 format (e.g. +972501234567). Required for the
+     * WhatsApp notification channel. Nullable so existing users (and users
+     * who only want email/in-app delivery) aren't forced to provide it.
+     *
+     * Column name is hard-coded because Drizzle's auto snake_case converter
+     * splits "phoneE164" into "phone_e_164" (extra underscore before the
+     * digits), which doesn't match the migration column "phone_e164".
+     */
+    phoneE164: text('phone_e164'),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     lastLoginAt: timestamp({ withTimezone: true }),
   },

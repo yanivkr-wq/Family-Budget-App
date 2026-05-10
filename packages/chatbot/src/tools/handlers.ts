@@ -42,6 +42,10 @@ export async function queryTransactions(ctx: ToolContext, rawArgs: unknown) {
     eq(schema.transactions.householdId, householdId),
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, false),
+    // Settlement-basis accounting (migration 0015): exclude CC detail rows
+    // covered by a bank-side settlement line. The chatbot's transaction
+    // queries should reflect the same source-of-truth as the dashboards.
+    eq(schema.transactions.excludedFromTotals, false),
     // Exclude txns tagged to a project hidden from monthly totals so the
     // chatbot doesn't surprise the user with a ₪200K construction
     // payment when they ask "what was my biggest expense this month?".
@@ -143,6 +147,8 @@ export async function getCategorySummary(ctx: ToolContext, rawArgs: unknown) {
         eq(schema.transactions.billingMonth, args.month),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
+        // Settlement-basis: exclude CC detail rows covered by bank settlement.
+        eq(schema.transactions.excludedFromTotals, false),
         excludeHiddenProjectTxns(),
       ),
     )
@@ -432,6 +438,7 @@ export async function searchMerchants(ctx: ToolContext, rawArgs: unknown) {
         ilike(schema.transactions.merchantNormalized, `%${args.query.toLowerCase()}%`),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
+        eq(schema.transactions.excludedFromTotals, false),
         excludeHiddenProjectTxns(),
       ),
     )

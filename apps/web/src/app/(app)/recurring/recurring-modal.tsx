@@ -22,6 +22,12 @@ export interface RecurringPatternRow {
   maxAmountIls:       string | number | null;
   frequency:          'monthly' | 'bimonthly' | 'quarterly' | 'yearly' | string;
   status:             'active' | 'paused' | 'ended' | string;
+  /** YYYY-MM-DD when current period ends. NULL = open-ended (default). */
+  subscriptionEndDate: string | null;
+  /** Does the subscription auto-renew at end_date? Default true. */
+  autoRenew:           boolean;
+  /** Days before end_date the user must cancel by. Default 0. */
+  cancelNoticeDays:    number;
   notes:              string | null;
 }
 
@@ -80,6 +86,17 @@ export function RecurringModal({
   const [sign, setSign] = useState<'expense' | 'income'>(initialSign);
   const [frequency, setFrequency] = useState(pattern?.frequency ?? 'monthly');
   const [status, setStatus] = useState(pattern?.status ?? 'active');
+  // Subscription lifecycle. End-date is an ISO date string (YYYY-MM-DD) the
+  // <input type="date"> understands; '' means "no end date set" (which we map
+  // to NULL on the server). Auto-renew default = true matches the column
+  // default — most patterns we auto-detect renew indefinitely.
+  const [subscriptionEndDate, setSubscriptionEndDate] = useState<string>(
+    pattern?.subscriptionEndDate ?? '',
+  );
+  const [autoRenew, setAutoRenew] = useState<boolean>(pattern?.autoRenew ?? true);
+  const [cancelNoticeDays, setCancelNoticeDays] = useState<string>(
+    String(pattern?.cancelNoticeDays ?? 0),
+  );
   const [notes, setNotes] = useState(pattern?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -110,9 +127,12 @@ export function RecurringModal({
     fd.set('minAmount',   minAmountStr);
     fd.set('maxAmount',   maxAmountStr);
     fd.set('sign',        sign);
-    fd.set('frequency',   frequency);
-    fd.set('status',      status);
-    fd.set('notes',       notes);
+    fd.set('frequency',           frequency);
+    fd.set('status',              status);
+    fd.set('subscriptionEndDate', subscriptionEndDate);
+    fd.set('autoRenew',           autoRenew ? '1' : '0');
+    fd.set('cancelNoticeDays',    cancelNoticeDays);
+    fd.set('notes',               notes);
 
     startTransition(async () => {
       const res = isEdit ? await updateRecurringPattern(fd) : await createRecurringPattern(fd);
@@ -301,6 +321,59 @@ export function RecurringModal({
               {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
+
+          {/* Subscription lifecycle — end date + auto-renew + notice period.
+              Grouped in a fieldset so the user understands these three travel
+              together. Empty end date = open-ended (the historical default). */}
+          <fieldset className="rounded-md border border-dashed border-muted-foreground/30 p-3 space-y-3">
+            <legend className="px-1 text-xs font-medium text-muted-foreground">
+              מחזור חיים של מנוי <span className="font-normal">(אופציונלי)</span>
+            </legend>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  תאריך סיום
+                </label>
+                <input
+                  type="date"
+                  value={subscriptionEndDate}
+                  onChange={(e) => setSubscriptionEndDate(e.target.value)}
+                  className="w-full rounded-md border bg-background px-2 py-2 text-sm tabular-nums"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  השאר ריק למנוי ללא תאריך סיום מוגדר
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  ימי הודעה לביטול
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={cancelNoticeDays}
+                  onChange={(e) => setCancelNoticeDays(e.target.value)}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm tabular-nums"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  כמה ימים לפני תאריך הסיום צריך לבטל
+                </p>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={autoRenew}
+                onChange={(e) => setAutoRenew(e.target.checked)}
+                className="size-4 rounded border-muted-foreground/40"
+              />
+              <span>מתחדש אוטומטית בתום המחזור</span>
+            </label>
+          </fieldset>
 
           {/* Notes */}
           <div className="space-y-1">
