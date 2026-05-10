@@ -6,8 +6,8 @@
   "main": "./dist/server.js",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
+    "build": "tsc --noEmit",
+    "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -45,7 +45,11 @@ COPY packages/categorizer/package.json packages/categorizer/
 COPY packages/chatbot/package.json packages/chatbot/
 RUN pnpm install --frozen-lockfile=false
 
-# ---- build ----
+# ---- build (typecheck only — actual execution uses tsx at runtime) ----
+# We don't tsc-compile the worker because the source uses extension-less
+# imports (import './config' instead of './config.js'), which would break
+# under Node's strict ESM resolver. tsx handles both styles transparently
+# and starts in <500ms, so the dev → prod path is identical.
 FROM deps AS build
 COPY . .
 RUN pnpm --filter @fba/worker build
@@ -55,9 +59,12 @@ FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/worker/node_modules ./apps/worker/node_modules
-COPY --from=build /app/apps/worker/dist ./apps/worker/dist
+COPY --from=build /app/apps/worker/src ./apps/worker/src
+COPY --from=build /app/apps/worker/package.json ./apps/worker/package.json
+COPY --from=build /app/apps/worker/tsconfig.json ./apps/worker/tsconfig.json
 COPY --from=build /app/packages ./packages
+COPY --from=build /app/tsconfig.base.json ./tsconfig.base.json
 
 ENTRYPOINT ["dumb-init", "--"]
 EXPOSE 8080
-CMD ["node", "apps/worker/dist/server.js"]
+CMD ["./apps/worker/node_modules/.bin/tsx", "apps/worker/src/server.ts"]
