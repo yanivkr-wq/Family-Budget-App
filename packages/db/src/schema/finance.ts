@@ -78,6 +78,28 @@ export const accounts = pgTable(
      */
     settlementMerchantPattern: text(),
     currency: text().notNull().default('ILS'),
+    /**
+     * The known balance of this account at a known point in time. Together with
+     * `openingBalanceAsOf` this is the ANCHOR used by the cumulative-balance
+     * KPI on the dashboard. The card sums all transactions on this account
+     * with chargeDate > openingBalanceAsOf and adds them to this value.
+     *
+     * Default 0 — accounts without a stored opening balance contribute only
+     * the sum of their in-system transactions (which means cumulative balance
+     * starts at 0 if no opening balance was set).
+     */
+    openingBalanceIls: numeric({ precision: 14, scale: 2 }).notNull().default('0'),
+    /**
+     * The date `openingBalanceIls` was true. Transactions dated BEFORE this
+     * date are NOT applied to the cumulative balance (they're treated as
+     * historical noise that predates the anchor). Set this to "today" when
+     * onboarding an existing account — give us today's bank balance and we
+     * compute every other day by walking the transactions.
+     *
+     * NULL = treat as "before any transaction in the system" (additive mode —
+     * transactions accumulate from openingBalance forward without a date filter).
+     */
+    openingBalanceAsOf: date(),
     isActive: boolean().notNull().default(true),
     lastScrapedAt: timestamp({ withTimezone: true }),
     lastScrapeStatus: text({ enum: ['ok', 'auth_failed', 'error', 'never'] })

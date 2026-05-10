@@ -37,8 +37,18 @@ export interface AccountRow {
   chargeDay: number;
   isActive: boolean;
   currency: string;
+  /** Anchor for cumulative balance — the known balance at openingBalanceAsOf */
+  openingBalanceIls: number;
+  /** ISO date (YYYY-MM-DD) the openingBalanceIls was true; null = "before all txns" */
+  openingBalanceAsOf: string | null;
   txnCount: number;
   txnTotal: number;
+  /**
+   * Sum of amounts for transactions where chargeDate >= openingBalanceAsOf
+   * (or all transactions, if openingBalanceAsOf is null). Used together with
+   * openingBalanceIls to display the "current cumulative balance" per account.
+   */
+  txnSumSinceOpening: number;
   /** true = auto-created by the system, not deletable */
   isSystem: boolean;
 }
@@ -326,6 +336,50 @@ function AccountForm({
             )}
           </fieldset>
 
+          {/* Opening balance — anchor for cumulative balance KPI */}
+          <fieldset className="space-y-3 rounded-lg border border-dashed border-emerald-500/40 bg-emerald-50/40 p-3 dark:bg-emerald-950/20">
+            <legend className="px-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+              יתרת פתיחה (לחישוב יתרה מצטברת בפועל)
+            </legend>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                יתרה ב-ILS
+                <input
+                  type="number"
+                  name="openingBalanceIls"
+                  step="0.01"
+                  defaultValue={initial?.openingBalanceIls ?? 0}
+                  placeholder="0.00"
+                  className="rounded-md border bg-background px-2 py-1.5 text-sm text-foreground"
+                />
+                <span className="text-[10px] font-normal text-muted-foreground/80">
+                  היתרה הידועה בחשבון בתאריך שתבחר. שלילי = משיכת יתר.
+                </span>
+              </label>
+
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                נכון לתאריך
+                <input
+                  type="date"
+                  name="openingBalanceAsOf"
+                  defaultValue={initial?.openingBalanceAsOf ?? ''}
+                  className="rounded-md border bg-background px-2 py-1.5 text-sm text-foreground"
+                />
+                <span className="text-[10px] font-normal text-muted-foreground/80">
+                  ריק = לפני כל התנועות במערכת. מומלץ: תאריך היום + יתרה נוכחית מהבנק.
+                </span>
+              </label>
+            </div>
+
+            <p className="rounded-md bg-emerald-100/60 px-2 py-1.5 text-[11px] leading-relaxed text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-100">
+              💡 <strong>הדרך הקלה ביותר:</strong> פתח את אתר הבנק עכשיו, העתק את היתרה הנוכחית
+              בעו&quot;ש, הדבק כאן + סמן בתאריך &quot;היום&quot;. שמור. מעכשיו, היתרה לכל חודש בעבר
+              ובעתיד תחושב אוטומטית מהתנועות במערכת — כולל תוספת/עדכון/מחיקה. אין צורך לדעת
+              את היתרה ההיסטורית.
+            </p>
+          </fieldset>
+
           {/* Active */}
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -548,6 +602,12 @@ export function AccountsClient({ initialAccounts }: { initialAccounts: AccountRo
               <th className="border-b px-3 py-2 font-medium">מחזור חיוב</th>
               <th className="border-b px-3 py-2 text-left font-medium">תנועות</th>
               <th className="border-b px-3 py-2 text-left font-medium">נטו</th>
+              <th
+                className="border-b px-3 py-2 text-left font-medium"
+                title="יתרה מצטברת בפועל = יתרת פתיחה + סכום תנועות מאז התאריך הנכון"
+              >
+                יתרה מצטברת
+              </th>
               <th className="border-b px-3 py-2 font-medium">סטטוס</th>
               <th className="border-b px-3 py-2" />
             </tr>
@@ -555,7 +615,7 @@ export function AccountsClient({ initialAccounts }: { initialAccounts: AccountRo
           <tbody>
             {accounts.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={10} className="px-3 py-10 text-center text-muted-foreground">
                   אין חשבונות. לחץ על &quot;הוסף חשבון&quot; כדי להתחיל.
                 </td>
               </tr>
@@ -637,6 +697,28 @@ export function AccountsClient({ initialAccounts }: { initialAccounts: AccountRo
                     )}
                   >
                     {a.txnCount > 0 ? formatIls(a.txnTotal, { decimals: false }) : '—'}
+                  </td>
+
+                  {/* Cumulative balance — opening + sum-since-opening (Phase B) */}
+                  <td
+                    className={cn(
+                      'px-3 py-2.5 text-left tabular-nums',
+                      (() => {
+                        const cum = a.openingBalanceIls + a.txnSumSinceOpening;
+                        return cum < 0
+                          ? 'text-destructive font-medium'
+                          : cum > 0
+                            ? 'text-emerald-600 font-medium'
+                            : 'text-muted-foreground';
+                      })(),
+                    )}
+                    title={
+                      `יתרת פתיחה: ${formatIls(a.openingBalanceIls, { decimals: false })}\n` +
+                      `+ סכום תנועות מאז ${a.openingBalanceAsOf ?? 'תחילת המערכת'}: ${formatIls(a.txnSumSinceOpening, { decimals: false })}\n` +
+                      `= ${formatIls(a.openingBalanceIls + a.txnSumSinceOpening, { decimals: false })}`
+                    }
+                  >
+                    {formatIls(a.openingBalanceIls + a.txnSumSinceOpening, { decimals: false })}
                   </td>
 
                   {/* Active badge */}

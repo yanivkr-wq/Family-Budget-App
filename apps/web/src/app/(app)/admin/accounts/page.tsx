@@ -1,6 +1,6 @@
 import { auth } from '@/lib/auth';
 import { getDb, schema } from '@fba/db';
-import { and, count, eq, sql } from 'drizzle-orm';
+import { and, count, eq, isNull, sql } from 'drizzle-orm';
 import { AccountsClient } from './client';
 import type { AccountRow } from './client';
 
@@ -11,8 +11,12 @@ export default async function AccountsAdminPage() {
   const householdId = session!.user.householdId;
   const db = getDb();
 
-  // Both reads are independent → parallelize.
-  const [accounts, txnStats] = await Promise.all([
+  // Three reads are independent → parallelize.
+  // - accounts: all account rows
+  // - txnStats: total count + sum (used for the "delete-with-txns" guard)
+  // - sinceOpening: per-account sum filtered by openingBalanceAsOf (if set).
+  //   Used for the cumulative-balance display in this admin (Phase B).
+  const [accounts, txnStats, sinceOpening] = await Promise.all([
     db
       .select({
         id: schema.accounts.id,
@@ -27,6 +31,8 @@ export default async function AccountsAdminPage() {
         chargeDay: schema.accounts.chargeDay,
         isActive: schema.accounts.isActive,
         currency: schema.accounts.currency,
+        openingBalanceIls: schema.accounts.openingBalanceIls,
+        openingBalanceAsOf: schema.accounts.openingBalanceAsOf,
       })
       .from(schema.accounts)
       .where(eq(schema.accounts.householdId, householdId))
@@ -45,15 +51,52 @@ export default async function AccountsAdminPage() {
         ),
       )
       .groupBy(schema.transactions.accountId),
+    // Per-account NET CHANGE for the cumulative-balance display, using the
+    // SYMMETRIC formula (matches dashboard logic):
+    //   currentBalance(account) = openingBalance + S(today) - S(asOf)
+    // where S(d) = sum of amounts with effectiveDate <= d.
+    // Implementation: a SUM(CASE) expression that returns +amount for txns
+    // between asOf and today, -amount for txns between today and asOf
+    // (handles asOf in the future), and 0 otherwise. NULL asOf is coalesced
+    // to '0001-01-01' so the "no-anchor" case becomes "sum everything up to today".
+    db
+      .select({
+        accountId: schema.accounts.id,
+        sumSinceOpening: sql<string>`coalesce(sum(case
+          when coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) > coalesce(${schema.accounts.openingBalanceAsOf}, '0001-01-01'::date)
+               and coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) <= current_date
+            then ${schema.transactions.amountIls}
+          when coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) > current_date
+               and coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) <= coalesce(${schema.accounts.openingBalanceAsOf}, '0001-01-01'::date)
+            then -${schema.transactions.amountIls}
+          else 0
+        end), 0)`,
+      })
+      .from(schema.accounts)
+      .leftJoin(
+        schema.transactions,
+        and(
+          eq(schema.transactions.accountId, schema.accounts.id),
+          isNull(schema.transactions.deletedAt),
+          eq(schema.transactions.isProjected, false),
+          eq(schema.transactions.excludedFromTotals, false),
+        ),
+      )
+      .where(eq(schema.accounts.householdId, householdId))
+      .groupBy(schema.accounts.id),
   ]);
   const statsById = new Map(txnStats.map((s) => [s.accountId, s]));
+  const sinceById = new Map(sinceOpening.map((s) => [s.accountId, Number(s.sumSinceOpening)]));
 
   const rows: AccountRow[] = accounts.map((a) => {
     const stats = statsById.get(a.id);
     return {
       ...a,
+      openingBalanceIls: Number(a.openingBalanceIls ?? 0),
+      openingBalanceAsOf: a.openingBalanceAsOf,
       txnCount: stats?.txnCount ?? 0,
       txnTotal: Number(stats?.txnTotal ?? 0),
+      txnSumSinceOpening: sinceById.get(a.id) ?? 0,
       // The auto-created "manual" account is system-managed
       isSystem: a.institution === 'manual',
     };

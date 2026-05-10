@@ -157,6 +157,14 @@ export default async function DashboardPage(props: {
     projectedConditions.push(inArray(schema.transactions.accountId, accountFilter));
   }
 
+  // ── End-of-selected-month — used by the cumulative balance KPI.
+  // For BANK accounts (which have no cutoff_day cycle), the billing month
+  // matches the calendar month, so end-of-billing-month = last calendar day.
+  // We pass this date to the cumulative-balance query as the upper bound:
+  // "show me the balance as it was at the end of this month".
+  const [eomYear, eomMon] = month.split('-').map(Number);
+  const eomDate = new Date(eomYear!, eomMon!, 0).toISOString().slice(0, 10);
+
   // ── Parallel 2: all main data in one round-trip (was 7+ sequential awaits) ─
   const DASHBOARD_TX_LIMIT = 20;
   const [
@@ -168,6 +176,8 @@ export default async function DashboardPage(props: {
     txCountRows,
     chargedRow,
     pendingRow,
+    cumulativeOpeningRow,
+    cumulativeTxnRow,
   ] = await Promise.all([
     // (a) spend/income totals by category
     noAccountsForView
@@ -270,6 +280,66 @@ export default async function DashboardPage(props: {
           )
           .then(([r]) => r)
       : Promise.resolve(undefined as { total: string } | undefined),
+
+    // (i) Cumulative balance — opening balance side.
+    // Sum opening_balance_ils across BANK accounts that match the active view.
+    // CC accounts excluded by design — cumulative balance represents "money
+    // you actually HAVE", which is bank-side.
+    noAccountsForView
+      ? Promise.resolve([{ total: '0' }])
+      : db
+          .select({ total: sql<string>`coalesce(sum(${schema.accounts.openingBalanceIls}), 0)` })
+          .from(schema.accounts)
+          .where(
+            and(
+              eq(schema.accounts.householdId, householdId),
+              eq(schema.accounts.type, 'bank'),
+              accountFilter && accountFilter.length > 0
+                ? inArray(schema.accounts.id, accountFilter)
+                : undefined,
+            ),
+          ),
+
+    // (j) Cumulative balance — net change side, using the SYMMETRIC formula:
+    //   balance(T) = openingBalance + S(T) - S(asOf)
+    // where S(d) = sum of all amounts with effectiveDate <= d. This works in
+    // both directions: future months ADD post-anchor activity, past months
+    // SUBTRACT activity that happened between T and the anchor (un-doing it).
+    // Letting NULL asOf behave as "negative infinity" makes the no-anchor
+    // case fall through to "sum everything up to T" automatically.
+    //
+    // Filters: bank accounts only (cumulative balance = cash on hand, not
+    // CC debt), not deleted, not projected, not excludedFromTotals.
+    // Transfers ARE included — they actually moved money in/out of bank
+    // accounts; the combined view sums them and they cancel automatically.
+    noAccountsForView
+      ? Promise.resolve([{ total: '0' }])
+      : db
+          .select({
+            total: sql<string>`coalesce(sum(case
+              when coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) > coalesce(${schema.accounts.openingBalanceAsOf}, '0001-01-01'::date)
+                   and coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) <= ${eomDate}
+                then ${schema.transactions.amountIls}
+              when coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) > ${eomDate}
+                   and coalesce(${schema.transactions.chargeDate}, ${schema.transactions.transactionDate}) <= coalesce(${schema.accounts.openingBalanceAsOf}, '0001-01-01'::date)
+                then -${schema.transactions.amountIls}
+              else 0
+            end), 0)`,
+          })
+          .from(schema.transactions)
+          .innerJoin(schema.accounts, eq(schema.accounts.id, schema.transactions.accountId))
+          .where(
+            and(
+              eq(schema.transactions.householdId, householdId),
+              eq(schema.accounts.type, 'bank'),
+              isNull(schema.transactions.deletedAt),
+              eq(schema.transactions.isProjected, false),
+              eq(schema.transactions.excludedFromTotals, false),
+              accountFilter && accountFilter.length > 0
+                ? inArray(schema.accounts.id, accountFilter)
+                : undefined,
+            ),
+          ),
   ]);
 
   // ── Synchronous derivations from the parallel batch results ───────────────
@@ -339,6 +409,13 @@ export default async function DashboardPage(props: {
 
   const alreadyChargedIls = Number(chargedRow?.total ?? 0);
   const pendingChargedIls = Number(pendingRow?.total ?? 0);
+
+  // Cumulative balance ("יתרה מצטברת בפועל") = opening anchor + transactions
+  // since the anchor (capped at end of selected month). Bank accounts only.
+  // See queries (i) and (j) above for filter rationale.
+  const cumulativeOpeningIls = Number(cumulativeOpeningRow[0]?.total ?? 0);
+  const cumulativeTxnIls = Number(cumulativeTxnRow[0]?.total ?? 0);
+  const cumulativeBalanceIls = cumulativeOpeningIls + cumulativeTxnIls;
 
   // ── Parallel 3: insights-only queries (non-blocking for main render) ───────
   const prevMonth = addMonths(month, -1);
@@ -755,6 +832,29 @@ export default async function DashboardPage(props: {
             ((view === 'combined' || view === 'household')
               ? ' העברות בין חשבונות שלך (isTransfer=true) מוסטרות כדי למנוע ספירה כפולה.'
               : '')
+          }
+        />
+        <Tile
+          label="יתרה מצטברת בפועל"
+          value={formatIls(cumulativeBalanceIls, { decimals: false })}
+          tone={cumulativeBalanceIls >= 0 ? 'success' : 'destructive'}
+          icon={<Banknote className="size-3.5" />}
+          caption={`לסוף ${formatMonthHe(month)}`}
+          info={
+            'מה זה?\n' +
+            `הסכום בפועל בחשבונות הבנק שלך לסוף ${formatMonthHe(month)}. ` +
+            'בניגוד לכרטיס "מאזן" שמראה רק את השינוי בחודש הזה, ' +
+            'זה מראה כמה כסף ממש יש לך בעו"ש.\n' +
+            '\nאיך החישוב עובד (נוסחה סימטרית):\n' +
+            '• היתרה לתאריך T = יתרת פתיחה + S(T) − S(נכון לתאריך)\n' +
+            '• כש-S(d) = סכום כל התנועות עד התאריך d.\n' +
+            '• המנגנון עובד גם קדימה (חודשים עתידיים) וגם אחורה (חודשים בעבר).\n' +
+            '\nאיך לכוון (פעם אחת בלבד):\n' +
+            '• עבור ל"ניהול חשבונות" וערוך כל חשבון בנק.\n' +
+            '• הזן את היתרה הנוכחית בבנק + תאריך היום בשדה "יתרת פתיחה".\n' +
+            '• זהו! היתרה לכל חודש בעבר ובעתיד תחושב אוטומטית מהתנועות.\n' +
+            '\nמוסטרות מהחישוב: כרטיסי אשראי (מציגים חוב, לא יתרה — חיוב חודשי כבר מתבטא ' +
+            'ביתרת הבנק), תנועות מחוקות, תנועות "צפוי", תנועות בקטגוריות מוסטרות.'
           }
         />
         <Tile

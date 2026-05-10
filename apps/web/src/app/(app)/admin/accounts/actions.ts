@@ -20,6 +20,16 @@ function parseAccountForm(formData: FormData) {
   };
   const paymentSchedule = String(formData.get('paymentSchedule') ?? 'immediate');
   const isMonthly = paymentSchedule === 'monthly_billing';
+
+  // Opening balance can be negative (overdraft) so we don't apply the >=0 guard.
+  const obRaw = formData.get('openingBalanceIls');
+  const obNum = obRaw === null || obRaw === '' ? 0 : Number(obRaw);
+  const openingBalanceIls = Number.isFinite(obNum) ? obNum : 0;
+
+  // openingBalanceAsOf may be empty (NULL semantics) — empty string ⇒ null.
+  const obAsOfRaw = String(formData.get('openingBalanceAsOf') ?? '').trim();
+  const openingBalanceAsOf = obAsOfRaw || null;
+
   return {
     name: String(formData.get('name') ?? '').trim(),
     type: String(formData.get('type') ?? 'bank') as 'bank' | 'credit_card',
@@ -32,6 +42,8 @@ function parseAccountForm(formData: FormData) {
     chargeDay: isMonthly ? numOrDefault('chargeDay', 10) : 0,
     isActive: formData.get('isActive') !== 'false',
     currency: String(formData.get('currency') ?? 'ILS').trim() || 'ILS',
+    openingBalanceIls,
+    openingBalanceAsOf,
   };
 }
 
@@ -62,6 +74,8 @@ export async function createAccount(
       chargeDay: f.chargeDay,
       isActive: f.isActive,
       currency: f.currency,
+      openingBalanceIls: String(f.openingBalanceIls),
+      openingBalanceAsOf: f.openingBalanceAsOf,
     })
     .returning({ id: schema.accounts.id });
 
@@ -114,6 +128,8 @@ export async function updateAccount(
       chargeDay: f.chargeDay,
       isActive: f.isActive,
       currency: f.currency,
+      openingBalanceIls: String(f.openingBalanceIls),
+      openingBalanceAsOf: f.openingBalanceAsOf,
     })
     .where(eq(schema.accounts.id, id));
 

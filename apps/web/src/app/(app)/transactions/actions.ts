@@ -106,7 +106,7 @@ export async function createTransaction(formData: FormData): Promise<CreateTrans
     if (!own) return { ok: false, error: 'חשבון לא נמצא' };
   }
 
-  // Resolve cutoff for billing month + auto-compute chargeDate if not supplied
+  // Resolve cutoff for billing month + auto-compute chargeDate if not supplied.
   const [acc] = await db
     .select({ cutoffDay: schema.accounts.cutoffDay })
     .from(schema.accounts)
@@ -123,6 +123,12 @@ export async function createTransaction(formData: FormData): Promise<CreateTrans
   const billingMonth = finalChargeDate
     ? finalChargeDate.slice(0, 7)
     : computeBillingMonth(transactionDate, cutoffDay);
+
+  // NOTE: a previous implementation rejected transactions whose effectiveDate
+  // predated the account's openingBalanceAsOf anchor. That was over-strict —
+  // the symmetric cumulative-balance formula in the dashboard handles
+  // pre-anchor transactions correctly (they cancel out in S(today)-S(asOf)),
+  // so no validation is needed.
 
   const [inserted] = await db
     .insert(schema.transactions)

@@ -468,10 +468,24 @@ export default async function ProjectDetailPage(props: {
             </section>
 
             <section className="tile lg:col-span-2 space-y-3" dir="rtl">
-              <h2 className="text-sm font-medium text-muted-foreground">
-                תזרים חודשי
-                <span className="ms-1 text-2xs text-muted-foreground/70">
-                  (אדום = הוצאות · ירוק = מימון)
+              <h2 className="flex items-center gap-3 text-sm font-medium text-muted-foreground">
+                <span>תזרים חודשי</span>
+                {/* Legend dots — match the actual bar colors. The expense bar
+                    uses the project's color (set in project settings), so the
+                    dot inherits the same backgroundColor. The income bar is
+                    always success-green. */}
+                <span className="flex items-center gap-3 text-2xs text-muted-foreground/70">
+                  <span className="flex items-center gap-1">
+                    <span
+                      className="inline-block size-2 rounded-full"
+                      style={{ backgroundColor: project.color ?? 'var(--primary)' }}
+                    />
+                    הוצאות
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block size-2 rounded-full bg-success" />
+                    הכנסה
+                  </span>
                 </span>
               </h2>
               {monthRows.length === 0 ? (
