@@ -201,15 +201,31 @@ for i in $(seq 1 30); do
 done
 
 # ---------- run migrations ----------
-# Worker image doesn't ship pnpm-workspace.yaml in the runtime stage, so we
-# invoke tsx via its package-local path rather than `pnpm --filter`.
+# Apply .sql migrations directly via psql instead of drizzle's migrator.
+# Drizzle's _journal.json is incomplete (only tracks 0000-0004) and the
+# meta/*_snapshot.json files for 0006-0021 are missing — so the migrator
+# silently stops after 0004, leaving the schema half-baked. Until the
+# journal is regenerated, applying the .sql files in order via psql is
+# the reliable path for prod bootstrap.
 TSX=/app/packages/db/node_modules/.bin/tsx
 DB_DIR=/app/packages/db
 
-say "Running database migrations"
-docker compose -f infra/docker-compose.yml exec -T worker \
-  "$TSX" "$DB_DIR/src/migrate.ts"
-ok "migrations applied"
+say "Running database migrations (psql, in filename order)"
+for f in packages/db/drizzle/*.sql; do
+  fname="$(basename "$f")"
+  printf '    applying %s ... ' "$fname"
+  if docker compose -f infra/docker-compose.yml exec -T postgres \
+       psql -U budget -d budget -v ON_ERROR_STOP=1 -q < "$f" >/dev/null 2>&1; then
+    printf '✓\n'
+  else
+    # Re-run with stderr visible so we can see what went wrong
+    printf '✗\n'
+    docker compose -f infra/docker-compose.yml exec -T postgres \
+      psql -U budget -d budget -v ON_ERROR_STOP=1 < "$f" 2>&1 | tail -10
+    die "migration $fname failed — see error above"
+  fi
+done
+ok "all migrations applied"
 
 # ---------- seed household + categories ----------
 # create-admin requires a household to already exist; seed creates one + the
