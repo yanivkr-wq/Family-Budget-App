@@ -4,11 +4,15 @@ RUN corepack enable
 WORKDIR /app
 
 # ---- deps stage ----
+# IMPORTANT: copy package.json for EVERY workspace package the web app
+# depends on (directly or transitively). Missing one → ERR_PNPM_WORKSPACE_PKG_NOT_FOUND.
+# Web currently uses: db, shared, categorizer. (Chatbot is worker-only.)
 FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY apps/web/package.json apps/web/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
+COPY packages/categorizer/package.json packages/categorizer/
 RUN pnpm install --frozen-lockfile=false
 
 # ---- build stage ----
@@ -17,6 +21,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=deps /app/packages/db/node_modules ./packages/db/node_modules
 COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=deps /app/packages/categorizer/node_modules ./packages/categorizer/node_modules
 COPY . .
 RUN pnpm --filter @fba/web build
 
