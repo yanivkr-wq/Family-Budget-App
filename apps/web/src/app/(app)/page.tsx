@@ -84,7 +84,12 @@ export default async function DashboardPage(props: {
             ),
           ),
     db
-      .select({ id: schema.accounts.id, purpose: schema.accounts.purpose, name: schema.accounts.name })
+      .select({
+        id: schema.accounts.id,
+        purpose: schema.accounts.purpose,
+        name: schema.accounts.name,
+        type: schema.accounts.type,
+      })
       .from(schema.accounts)
       .where(eq(schema.accounts.householdId, householdId)),
   ]);
@@ -121,12 +126,14 @@ export default async function DashboardPage(props: {
   if (view !== 'household') {
     baseConditions.push(excludeHiddenProjectTxns());
   }
-  // Transfers between own accounts are excluded from BOTH combined and
-  // household views to prevent double-counting (the same money would appear
-  // as both income on one side and expense on the other).
-  if (view === 'combined' || view === 'household') {
-    baseConditions.push(eq(schema.transactions.isTransfer, false));
-  }
+  // Transfers between own accounts are excluded from ALL views' cash-flow
+  // totals. They're not real income or expense — they're moving the user's
+  // own money between accounts (e.g. a salary transfer from business → personal,
+  // or a savings deposit). Including them inflates BOTH income and expense
+  // numbers without changing the bottom-line balance, and creates noise in
+  // category breakdowns. This matches the behavior of the per-cycle banner
+  // on /transactions which has always excluded transfers via sumExp/sumInc.
+  baseConditions.push(eq(schema.transactions.isTransfer, false));
   // Settlement-basis accounting (migration 0015): exclude CC detail rows
   // already covered by their bank-side settlement line, plus user-flagged
   // accounting noise (loan refinancing, internal corrections). Forex CC
@@ -135,6 +142,18 @@ export default async function DashboardPage(props: {
   if (accountFilter && accountFilter.length > 0) {
     baseConditions.push(inArray(schema.transactions.accountId, accountFilter));
   }
+
+  // NOTE on cash-flow totals: a previous version added an `account.type='bank'`
+  // filter to keep CC charges out of monthly totals. That was over-correcting
+  // — it also excluded FOREX CC charges (debited from the bank immediately,
+  // not part of the monthly settlement) which SHOULD count toward cash flow.
+  // The settlement-basis flag `excludedFromTotals` (in baseConditions above)
+  // already does the right thing:
+  //   - Non-forex CC details: excludedFromTotals=true → not counted (covered
+  //     by the bank settlement line which IS counted).
+  //   - Forex CC charges: excludedFromTotals=false → counted as cash flow.
+  // So baseConditions alone is the correct filter; both the top KPI cards
+  // and the "עסקאות החודש" summary use the same filter and stay aligned.
 
   const isCurrentMonth = month === cur;
   const today = new Date();
@@ -153,9 +172,12 @@ export default async function DashboardPage(props: {
   if (view !== 'household') {
     projectedConditions.push(excludeHiddenProjectTxns());
   }
+  // Same account-purpose filter as baseConditions (no bank-only filter — see
+  // note above; settlement-basis already excludes non-forex CC charges).
   if (accountFilter && accountFilter.length > 0) {
     projectedConditions.push(inArray(schema.transactions.accountId, accountFilter));
   }
+  projectedConditions.push(eq(schema.transactions.excludedFromTotals, false));
 
   // ── End-of-selected-month — used by the cumulative balance KPI.
   // For BANK accounts (which have no cutoff_day cycle), the billing month
@@ -178,6 +200,7 @@ export default async function DashboardPage(props: {
     pendingRow,
     cumulativeOpeningRow,
     cumulativeTxnRow,
+    cashFlowSumsRow,
   ] = await Promise.all([
     // (a) spend/income totals by category
     noAccountsForView
@@ -219,7 +242,10 @@ export default async function DashboardPage(props: {
       .from(schema.transactions)
       .where(and(...projectedConditions)),
 
-    // (e) recent transactions for the dashboard strip
+    // (e) recent transactions for the dashboard strip — BANK ONLY so the
+    // strip's summary bar (computed client-side from these rows) matches the
+    // bank-only KPI cards above. CC transactions are still visible on the
+    // /transactions page, in the donut, and in projects.
     noAccountsForView
       ? Promise.resolve(
           [] as Array<{
@@ -245,7 +271,7 @@ export default async function DashboardPage(props: {
           .orderBy(desc(schema.transactions.transactionDate))
           .limit(DASHBOARD_TX_LIMIT),
 
-    // (f) total transaction count for the "N more" footer
+    // (f) total transaction count for the "N more" footer — BANK ONLY (matches the strip)
     noAccountsForView
       ? Promise.resolve([{ n: '0' as string }])
       : db
@@ -254,6 +280,8 @@ export default async function DashboardPage(props: {
           .where(and(...baseConditions)),
 
     // (g) "already charged" — chargeDate ≤ today OR null (money already left the bank)
+    // BANK ONLY (cash-flow view): we want the bank settlement to be the source
+    // of truth, not the CC detail rows.
     isCurrentMonth && !noAccountsForView
       ? db
           .select({ total: sql<string>`coalesce(sum(${schema.transactions.amountIls}), 0)` })
@@ -267,7 +295,7 @@ export default async function DashboardPage(props: {
           .then(([r]) => r)
       : Promise.resolve(undefined as { total: string } | undefined),
 
-    // (h) "pending charge" — chargeDate > today (debit still in the future)
+    // (h) "pending charge" — chargeDate > today (debit still in the future). BANK ONLY.
     isCurrentMonth && !noAccountsForView
       ? db
           .select({ total: sql<string>`coalesce(sum(${schema.transactions.amountIls}), 0)` })
@@ -340,6 +368,24 @@ export default async function DashboardPage(props: {
                 : undefined,
             ),
           ),
+
+    // (k) Cash-flow sums — TRUE income/expense totals, summed PER ROW (not
+    // grouped by category). Drives the dashboard's KPI cards (הכנסות החודש,
+    // הוצאות החודש, מאזן). Without this, the (a) `totals` query groups by
+    // category first, so a category that mixes positive and negative txns
+    // (e.g., loan disbursement +53K and CC settlement −41K both tagged
+    // "הלוואות וחיסכון") sums to a single positive value (+12K) and the
+    // expense gets hidden. Per-row classification keeps the math honest.
+    noAccountsForView
+      ? Promise.resolve({ income: '0', spent: '0' })
+      : db
+          .select({
+            income: sql<string>`coalesce(sum(case when ${schema.transactions.amountIls} >= 0 then ${schema.transactions.amountIls} else 0 end), 0)`,
+            spent: sql<string>`coalesce(sum(case when ${schema.transactions.amountIls} <  0 then ${schema.transactions.amountIls} else 0 end), 0)`,
+          })
+          .from(schema.transactions)
+          .where(and(...baseConditions))
+          .then(([r]) => r ?? { income: '0', spent: '0' }),
   ]);
 
   // ── Synchronous derivations from the parallel batch results ───────────────
@@ -367,14 +413,19 @@ export default async function DashboardPage(props: {
   // categories. These are usually unflagged transfers between the user's
   // own accounts. Surface a soft warning so the user can re-tag them as
   // transfers (which then get excluded from the combined view).
-  let totalIncome = 0;
-  let totalSpent = 0;
-  let suspiciousIncomeIls = 0; // sum of positive amounts on non-income cats
+  // Top KPI cards (הכנסות / הוצאות / מאזן) come from cashFlowSumsRow which
+  // does PER-ROW classification — the only honest split when a category mixes
+  // positive and negative transactions (see (k) above for full explanation).
+  const totalIncome = Number(cashFlowSumsRow?.income ?? 0);
+  const totalSpent = Number(cashFlowSumsRow?.spent ?? 0);
+
+  // Suspicious-income warning STILL iterates the per-category `totals` so we
+  // surface mis-tagged transfers at the category level (a +1K row in an
+  // expense category is the signal we care about).
+  let suspiciousIncomeIls = 0;
   for (const t of totals) {
     const cat = t.categoryId ? catMap.get(t.categoryId) : null;
     const v = Number(t.total);
-    if (v >= 0) totalIncome += v;
-    else        totalSpent  += v;
     if (v > 1000 && cat && !cat.isIncome) {
       suspiciousIncomeIls += v;
     }
@@ -525,12 +576,21 @@ export default async function DashboardPage(props: {
         totalBudgetIls: schema.projects.totalBudgetIls,
         status:         schema.projects.status,
         excludeFromMonthlyTotals: schema.projects.excludeFromMonthlyTotals,
+        // NET out-of-pocket: SUM(amount) is negative when more went out than
+        // came in (expenses − income); we ABS to display as a positive figure
+        // matching the "spent so far" framing. This is the SAME number the
+        // project drilldown page shows as "netOutOfPocket" — they used to
+        // disagree because this card summed ABS(amount), counting loan
+        // disbursements (income) as "spent" alongside vendor payments.
+        // Excludes excluded_from_totals rows (loan refinancing noise) like
+        // the project page does.
         totalSpent: sql<string>`(
-          SELECT COALESCE(SUM(ABS(t.amount_ils::numeric)), 0)
+          SELECT COALESCE(ABS(SUM(t.amount_ils::numeric)), 0)
           FROM ${schema.transactions} t
           WHERE t.project_id = "project"."id"
             AND t.deleted_at IS NULL
             AND t.is_projected = false
+            AND t.excluded_from_totals = false
         )`,
         txnCount: sql<string>`(
           SELECT COUNT(*) FROM ${schema.transactions} t
@@ -820,17 +880,23 @@ export default async function DashboardPage(props: {
             `\n• הכנסות החודש: ${formatIls(totalIncome, { decimals: false })}    (כסף שנכנס)\n` +
             `• הוצאות החודש: ${formatIls(spent, { decimals: false })}    (כסף שיצא)\n` +
             `• מאזן: ${formatIls(totalIncome, { decimals: false })} − ${formatIls(spent, { decimals: false })} = ${formatIls(balance, { decimals: false })}\n` +
-            '\nמשמעות:\n' +
+            '\n💡 איך אנחנו מתייחסים לכרטיסי אשראי:\n' +
+            '• חיוב חודשי רגיל מאשראי — לא נספר פעמיים. השורה החודשית של ' +
+            'הבנק (בד"כ ב-10 לחודש) היא המקור היחיד; הפירוטים של החיובים ' +
+            'בכרטיס מסומנים אוטומטית כ"מכוסה ע"י השורה החודשית".\n' +
+            '• חיוב מטבע חוץ מאשראי (Forex) — כן נספר. הוא יורד מהבנק שלך ' +
+            'מיידית, לא ב-10 לחודש, ולכן הוא חלק מהתזרים האמיתי.\n' +
+            '• בעוגה למטה: כל הקטגוריות כלולות, כדי לראות על מה הוצאת.\n' +
+            '\nמשמעות המאזן:\n' +
             '• מאזן חיובי = הוצאת פחות ממה שהרווחת (יתרה לחיסכון/חודש הבא).\n' +
-            '• מאזן שלילי = הוצאת יותר ממה שהרווחת (אם זה לא חודש מיוחד — שווה לבדוק).\n' +
-            '\nשים לב: זה המאזן עד היום (תנועות בפועל) ולא תחזית עד סוף החודש. ' +
-            'לתחזית סוף-חודש ראה את הכרטיס ליד.\n' +
-            '\nמוסטרות מהחישוב: תנועות מחוקות, תנועות "צפוי" (מתוכננות)' +
+            '• מאזן שלילי = הוצאת יותר ממה שהרווחת.\n' +
+            '\nמוסטרות מהחישוב: תנועות מחוקות, תנועות "צפוי", תנועות מסומנות ' +
+            '"אל תספור בסיכומים"' +
             (view === 'household'
-              ? '. בטאב "משק בית" כלולות גם תנועות פרויקטים מוסתרים — לאימות תזרים מלא של משק הבית.'
+              ? '. בטאב "משק בית" כלולות גם תנועות פרויקטים מוסתרים.'
               : ', ותנועות שמתויגות לפרויקט עם "הסתר מהתצוגות החודשיות".') +
             ((view === 'combined' || view === 'household')
-              ? ' העברות בין חשבונות שלך (isTransfer=true) מוסטרות כדי למנוע ספירה כפולה.'
+              ? ' העברות בין חשבונות שלך מוסטרות כדי למנוע ספירה כפולה.'
               : '')
           }
         />
@@ -841,20 +907,32 @@ export default async function DashboardPage(props: {
           icon={<Banknote className="size-3.5" />}
           caption={`לסוף ${formatMonthHe(month)}`}
           info={
-            'מה זה?\n' +
-            `הסכום בפועל בחשבונות הבנק שלך לסוף ${formatMonthHe(month)}. ` +
-            'בניגוד לכרטיס "מאזן" שמראה רק את השינוי בחודש הזה, ' +
-            'זה מראה כמה כסף ממש יש לך בעו"ש.\n' +
-            '\nאיך החישוב עובד (נוסחה סימטרית):\n' +
-            '• היתרה לתאריך T = יתרת פתיחה + S(T) − S(נכון לתאריך)\n' +
-            '• כש-S(d) = סכום כל התנועות עד התאריך d.\n' +
-            '• המנגנון עובד גם קדימה (חודשים עתידיים) וגם אחורה (חודשים בעבר).\n' +
-            '\nאיך לכוון (פעם אחת בלבד):\n' +
-            '• עבור ל"ניהול חשבונות" וערוך כל חשבון בנק.\n' +
-            '• הזן את היתרה הנוכחית בבנק + תאריך היום בשדה "יתרת פתיחה".\n' +
-            '• זהו! היתרה לכל חודש בעבר ובעתיד תחושב אוטומטית מהתנועות.\n' +
-            '\nמוסטרות מהחישוב: כרטיסי אשראי (מציגים חוב, לא יתרה — חיוב חודשי כבר מתבטא ' +
-            'ביתרת הבנק), תנועות מחוקות, תנועות "צפוי", תנועות בקטגוריות מוסטרות.'
+            (cumulativeOpeningIls === 0
+              ? 'עוד לא הזנת יתרת פתיחה לאף חשבון בנק, אז המספר שאתה רואה הוא ' +
+                'רק סכום כל תנועות הבנק במערכת — לא משקף את היתרה האמיתית בבנק.\n' +
+                '\nאיך לתקן:\n' +
+                'עבור ל"ניהול חשבונות" → ערוך כל חשבון בנק → הזן את היתרה ' +
+                'הנוכחית מאתר הבנק + סמן בתאריך "היום". שמור.\n' +
+                'מהרגע הזה ואילך, המערכת תדע את הנקודת ההתחלה ותדאג שהמספר ' +
+                'הזה תמיד יהיה מיושר עם הבנק שלך — בכל חודש, גם אחורה וגם קדימה.\n'
+              : 'זה הסיפור של החישוב לסוף ' + formatMonthHe(month) + ':\n' +
+                '\nתחילת הסיפור — כשהזנת את יתרות הפתיחה בכל חשבונות הבנק שלך, ' +
+                'סיכמנו את כולן ויצא:\n' +
+                `   📍 יתרת פתיחה (סך כל החשבונות): ${formatIls(cumulativeOpeningIls, { decimals: false })}\n` +
+                '\nמה קרה מאז — בדקנו את כל תנועות הבנק הרלוונטיות לסוף ' + formatMonthHe(month) + '. ' +
+                'הסכמנו אותן (הכנסות פחות הוצאות), ויצא:\n' +
+                `   ${cumulativeTxnIls >= 0 ? '➕' : '➖'} שינוי נטו: ${formatIls(cumulativeTxnIls, { decimals: false })}\n` +
+                '\nהתוצאה — חיברנו את שני המספרים יחד:\n' +
+                `   ${formatIls(cumulativeOpeningIls, { decimals: false })} ${cumulativeTxnIls >= 0 ? '+' : '−'} ${formatIls(Math.abs(cumulativeTxnIls), { decimals: false })} = ${formatIls(cumulativeBalanceIls, { decimals: false })}\n` +
+                '\n💡 איך זה עובד לחודשים אחרים — אם תבחר חודש בעבר, המערכת מחשבת ' +
+                'אחורה: לוקחת את היתרה של היום ו"מבטלת" את כל מה שהוצאת/הכנסת ' +
+                'מאז ועד אז. אם תבחר חודש עתידי, היא מוסיפה קדימה. הקסם: לא צריך ' +
+                'לדעת את היתרה ההיסטורית — רק את היתרה של היום.\n') +
+            '\nמי לא נספר במספר הזה:\n' +
+            '🚫 כרטיסי אשראי (אלה מראים חוב, לא יתרה — וחיוב חודשי כבר מתבטא בבנק)\n' +
+            '🚫 תנועות מחוקות\n' +
+            '🚫 תנועות "צפוי" (תזכורות לעתיד)\n' +
+            '🚫 תנועות שסומנו "אל תספור בסיכומים"'
           }
         />
         <Tile
@@ -1272,10 +1350,15 @@ export default async function DashboardPage(props: {
           )}
 
           {/* ── Transactions strip — full width ── */}
+          {/* Pass server-computed full-month totals so the strip's summary
+              bar always matches the top KPI cards (otherwise it'd sum only
+              the 20 displayed rows and diverge for busy months). */}
           <DashboardTransactionsSection
             transactions={dashboardTxns}
             month={month}
             totalCount={totalTxCount}
+            monthTotalIncome={totalIncome}
+            monthTotalExpenses={spent}
           />
         </>
       )}
@@ -1621,13 +1704,22 @@ function computeInsights(args: {
     }
 
     const name = plan.description ?? plan.merchantNormalized;
+    // Derive THIS-MONTH's payment number from the cycle position rather
+    // than from plan.currentPaymentNo (which only advances when an actual
+    // payment row is imported — for the LAST payment of a plan, the file
+    // showing it might not be uploaded yet, so currentPaymentNo lags).
+    // For "ending this month" the position IS totalPayments by definition;
+    // for "ending next month" it's totalPayments - 1.
+    const positionThisMonth = endingThisMonth
+      ? (plan.totalPayments ?? plan.currentPaymentNo)
+      : Math.max(1, (plan.totalPayments ?? plan.currentPaymentNo + 1) - 1);
     const isLastObserved = plan.totalPayments && plan.currentPaymentNo === plan.totalPayments;
     insights.push({
       id: `ending-soon-${plan.id}`,
       severity: 'info',
       icon: 'PartyPopper',
       title: `"${name}" ${endingThisMonth ? 'מסתיים החודש' : 'מסתיים בחודש הבא'}`,
-      body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} · ${plan.totalPayments ? `${plan.currentPaymentNo}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}${isLastObserved ? ' (הושלם)' : ''}`,
+      body: `תשלום חודשי ${ils(Math.abs(Number(plan.paymentAmountIls)))} · ${plan.totalPayments ? `${positionThisMonth}/${plan.totalPayments} תשלומים` : 'תשלום אחרון'}${isLastObserved ? ' (הושלם)' : ''}`,
       explanation:
         `בדקתי תאריכי סיום צפויים של תוכניות תשלומים פעילות.\n` +
         `\n` +

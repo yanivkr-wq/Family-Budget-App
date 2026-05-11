@@ -89,6 +89,10 @@ interface Transaction {
    *  totals (capex/opex split). Surfaced to the edit modal so the toggle
    *  reflects the saved state and so we can show a "📅 גם חודשי" badge. */
   includeInMonthlyOverride?: boolean;
+  /** Accounting-noise flag — row is visible but excluded from EVERY sum
+   *  (monthly totals, project totals, insights). Used by settlement-basis
+   *  CC accounting + manual flagging via the project-menu toggle. */
+  excludedFromTotals?: boolean;
 }
 
 function sumExpenses(txns: Transaction[]) {
@@ -1085,22 +1089,39 @@ export function TransactionsList(props: {
           button or the bulk-action "תייג לפרויקט" button. The menu owns
           its own outside-click + Esc close behaviour. After a successful
           assignment it clears bulk selection if it was a bulk action. */}
-      {projectMenu && (
-        <AssignToProjectMenu
-          projects={props.projects}
-          transactionIds={projectMenu.targetIds}
-          showRemove={projectMenu.targetIds.some(
-            (id) => !!props.transactions.find((t) => t.id === id)?.projectId,
-          )}
-          triggerRect={projectMenu.triggerRect}
-          onClose={() => setProjectMenu(null)}
-          onDone={() => {
-            // If this was a bulk action, clear the selection so the user
-            // gets visual confirmation that the action consumed it.
-            if (projectMenu.targetIds.length > 1) setSelected(new Set());
-          }}
-        />
-      )}
+      {projectMenu && (() => {
+        // Single-row case: read the row's current flag state so the toggles
+        // start in the right position. Bulk case: leave undefined → toggles
+        // start unchecked, user click applies the same value to every selected
+        // row.
+        const singleRow = projectMenu.targetIds.length === 1
+          ? props.transactions.find((t) => t.id === projectMenu.targetIds[0])
+          : undefined;
+        return (
+          <AssignToProjectMenu
+            projects={props.projects}
+            transactionIds={projectMenu.targetIds}
+            showRemove={projectMenu.targetIds.some(
+              (id) => !!props.transactions.find((t) => t.id === id)?.projectId,
+            )}
+            triggerRect={projectMenu.triggerRect}
+            initialFlags={singleRow ? {
+              isTransfer:               singleRow.isTransfer,
+              excludedFromTotals:       singleRow.excludedFromTotals,
+              includeInMonthlyOverride: singleRow.includeInMonthlyOverride,
+            } : undefined}
+            rowHasProject={singleRow ? !!singleRow.projectId : projectMenu.targetIds.some(
+              (id) => !!props.transactions.find((t) => t.id === id)?.projectId,
+            )}
+            onClose={() => setProjectMenu(null)}
+            onDone={() => {
+              // If this was a bulk action, clear the selection so the user
+              // gets visual confirmation that the action consumed it.
+              if (projectMenu.targetIds.length > 1) setSelected(new Set());
+            }}
+          />
+        );
+      })()}
     </>
   );
 }

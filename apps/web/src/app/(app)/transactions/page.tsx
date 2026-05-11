@@ -202,7 +202,17 @@ export default async function TransactionsPage(props: {
       // Installment-plan link (null for one-off transactions). When non-null,
       // we surface a "תשלום N/Y · עד MM/YY" pill on the row.
       installmentPlanId:           schema.transactions.installmentPlanId,
-      installmentCurrentPaymentNo: schema.installmentPlans.currentPaymentNo,
+      // PER-ROW payment number, computed from this row's billing month vs
+      // the plan's start month (NOT the plan-level currentPaymentNo, which
+      // is the same for every row in the plan and would always show "1/4"
+      // on every installment regardless of which payment it actually is).
+      // Formula: months_between(start, billing) + 1.
+      installmentCurrentPaymentNo: sql<number>`(
+        (extract(year from to_date(${schema.transactions.billingMonth} || '-01', 'YYYY-MM-DD'))
+          - extract(year from to_date(${schema.installmentPlans.startMonth} || '-01', 'YYYY-MM-DD'))) * 12
+        + (extract(month from to_date(${schema.transactions.billingMonth} || '-01', 'YYYY-MM-DD'))
+          - extract(month from to_date(${schema.installmentPlans.startMonth} || '-01', 'YYYY-MM-DD'))) + 1
+      )::int`,
       installmentTotalPayments:    schema.installmentPlans.totalPayments,
       installmentEndMonth:         schema.installmentPlans.projectedEndMonth,
       // Match by merchant against the user's recurring patterns. When the
@@ -443,82 +453,46 @@ export default async function TransactionsPage(props: {
   }
 
   type TxnRow = typeof txns[number];
+  // FEATURE DISABLED (user request, 2026-05): synthesized projected
+  // installment forecasts are turned off because they don't come from real
+  // imports and were causing confusion ("צפוי" badges on rows the user
+  // didn't recognize). The plan-fetching query above is kept so we can
+  // easily re-enable. To restore: replace the empty array with the synthesis
+  // loop (see git blame for the full implementation).
+  void activePlans;
+  void planCategoryHints;
   const projectedTxns: TxnRow[] = [];
-  for (const plan of activePlans) {
-    if (!plan.totalPayments) continue;
-    // Only project payments that haven't been recorded yet — anything
-    // up to currentPaymentNo is already in the file (or earlier files).
-    for (let n = plan.currentPaymentNo + 1; n <= plan.totalPayments; n++) {
-      const paymentMonth = addMonth(plan.startMonth, n - 1);
-      if (paymentMonth !== month) continue; // not in the view's billing month
 
-      // Skip if a real transaction for this plan already exists in this
-      // billing month (handles re-imports and edge cases gracefully).
-      const realExists = txns.some((t) =>
-        t.installmentPlanId === plan.id && t.billingMonth === paymentMonth,
-      );
-      if (realExists) continue;
-
-      const hints = planCategoryHints.get(plan.id);
-      // Synth charge_date = the 10th of the billing month (Israeli CC
-      // convention). transaction_date = same — projections don't have a
-      // real purchase date, so we use the charge date as a placeholder.
-      const synthDate = `${paymentMonth}-10`;
-      projectedTxns.push({
-        ...({} as TxnRow), // satisfy TS — we override every field below
-        id:           `projected-${plan.id}-${n}`,
-        date:         synthDate,
-        chargeDate:   synthDate,
-        billingMonth: paymentMonth,
-        amount:       String(-Math.abs(Number(plan.paymentAmountIls))),
-        merchant:     plan.description ?? plan.merchantNormalized,
-        categoryId:   hints?.categoryId ?? null,
-        subCategoryId: hints?.subCategoryId ?? null,
-        accountId:    plan.accountId ?? '',
-        isManual:     false,
-        notes:        `תשלום ${n} מתוך ${plan.totalPayments} (צפוי — טרם נקלט)`,
-        appliedRuleId:     null,
-        categorySource:    null,
-        ruleName:          null,
-        rulePattern:       null,
-        installmentPlanId:           plan.id,
-        installmentCurrentPaymentNo: n,
-        installmentTotalPayments:    plan.totalPayments,
-        installmentEndMonth:         plan.projectedEndMonth,
-        recurringPatternId:        null,
-        recurringPatternFrequency: null,
-        originalAmount:   null,
-        originalCurrency: null,
-        transferPairId:   null,
-        importFilename:   null,
-        importCreatedAt:  null,
-        projectId:        null,
-        isTransfer:       false,
-        excludedFromTotals: false,
-        // Synthesized projection rows are never settlement lines (those
-        // come from bank statements; projections are forward-looking
-        // installment forecasts).
-        isSettlementLine: false,
-        includeInMonthlyOverride: false,
-      });
-    }
-  }
-
-  // Inject projections at the END of the array (most recent dates first
-  // already due to the orderBy). The list will sort/group naturally.
-  // We tag them via `isProjected: true` on the row interface — adding
-  // that flag to the row type extension below.
   const txnsWithProjections = [...txns, ...projectedTxns];
 
   // ── ccView render-time filter ─────────────────────────────────────────────
   // The cycle banner sum reducers run on the FULL set above (so settlement
   // lines, CC details, etc. all stay accounted for). The user-visible LIST
   // filters per the toggle:
-  //   • settlement (default) → hide CC details (excluded_from_totals=true)
-  //   • details              → hide bank-side settlement lines (isSettlementLine)
+  //   • settlement (default) → hide CC details (the per-purchase rows on
+  //     a CC account that aren't forex; the bank-side settlement line covers
+  //     them, so showing them is double-detail)
+  //   • details              → hide bank-side settlement lines
   // Same total either way — only what's visible changes.
+  //
+  // We use STRUCTURAL signals (account type + currency) rather than the
+  // `excluded_from_totals` flag here. The flag is a soft signal that can be
+  // flipped by user edits (e.g., turning on "include in monthly totals"
+  // could clear it), losing its "CC detail" meaning. account.type='credit_card'
+  // + non-forex is permanent and unambiguous.
+  // Defined here (early) because the cycle classification below also uses
+  // accMap — keep one shared map.
+  const accMap = new Map(accounts.map((a) => [a.id, a]));
+  const isCcDetailRow = (t: typeof txnsWithProjections[number]) => {
+    const acc = accMap.get(t.accountId);
+    if (acc?.type !== 'credit_card') return false;
+    // Forex CC charges debit the bank immediately (no monthly settlement
+    // covers them) → they're effectively immediate, not "details".
+    if (t.originalCurrency && t.originalCurrency !== 'ILS') return false;
+    return true;
+  };
   const txnsForList = txnsWithProjections.filter((t) => {
-    if (ccView === 'settlement') return !t.excludedFromTotals;
+    if (ccView === 'settlement') return !isCcDetailRow(t);
     /* details */ return !t.isSettlementLine;
   });
 
@@ -540,11 +514,26 @@ export default async function TransactionsPage(props: {
   // Next cycle    = days 11+ (date > cycleChargeDate)
   // Includes projected installment payments so the user sees the full
   // expected outflow, not just what's been imported so far.
+  // Classification rules:
+  //   - IMMEDIATE charges (bank txns + forex CC) hit the bank on their own
+  //     date with no monthly settlement → they always belong to the CURRENT
+  //     cycle bucket, regardless of date. The "next cycle" doesn't exist
+  //     for them.
+  //   - CC DETAIL charges accumulate during the cycle and settle as a
+  //     single bank-side line on cycleChargeDate. They split by date:
+  //     dated ≤ cycleChargeDate → current cycle (just settled / settling),
+  //     dated > cycleChargeDate → next cycle (will settle next month).
+  //   accMap is defined earlier (see ccView render-time filter).
+  const isImmediateRow = (t: typeof txns[number]) => {
+    if (accMap.get(t.accountId)?.type === 'bank') return true;
+    if (!!t.originalCurrency && t.originalCurrency !== 'ILS') return true; // forex CC
+    return false;
+  };
   const currentCycleTxns = txnsWithProjections.filter(
-    (t) => String(t.date) <= cycleChargeDate,
+    (t) => isImmediateRow(t) || String(t.date) <= cycleChargeDate,
   );
   const nextCycleTxns = txnsWithProjections.filter(
-    (t) => String(t.date) > cycleChargeDate,
+    (t) => !isImmediateRow(t) && String(t.date) > cycleChargeDate,
   );
 
   // Sum reducers skip rows where excluded_from_totals=true (CC detail rows
@@ -821,6 +810,7 @@ export default async function TransactionsPage(props: {
           projectId:        t.projectId,
           isTransfer:       t.isTransfer,
           includeInMonthlyOverride: t.includeInMonthlyOverride,
+          excludedFromTotals: t.excludedFromTotals,
         }))}
         categories={topCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color }))}
         subCategories={subCats.map((c) => ({ id: c.id, nameHe: c.nameHe, color: c.color, parentId: c.parentId! }))}

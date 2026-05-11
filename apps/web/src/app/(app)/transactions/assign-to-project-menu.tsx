@@ -20,11 +20,22 @@ import { useEffect, useLayoutEffect, useRef, useState, useTransition } from 'rea
 import { Briefcase, X, FolderMinus } from 'lucide-react';
 import Link from 'next/link';
 import { assignTransactionsToProject } from '../projects/actions';
+import { setTransactionFlags } from './actions';
 
 export interface ProjectOption {
   id:    string;
   name:  string;
   color: string | null;
+}
+
+/** Initial state of the per-row flags shown in the menu. Pass undefined for
+ *  bulk (multi-row) actions where rows may disagree — the menu then renders
+ *  the toggles in an "indeterminate" state and applies the user's choice
+ *  to all selected rows on click. */
+export interface InitialFlags {
+  isTransfer?:               boolean;
+  excludedFromTotals?:       boolean;
+  includeInMonthlyOverride?: boolean;
 }
 
 export function AssignToProjectMenu({
@@ -36,6 +47,13 @@ export function AssignToProjectMenu({
   /** Bounding rect of the button that opened the menu. Used to compute
    *  positioning + decide whether to open above/below the trigger. */
   triggerRect,
+  /** Initial flag state for the toggles. For single-row use, pass the row's
+   *  current values; for multi-row, omit (toggles start indeterminate). */
+  initialFlags,
+  /** True when the row this menu was opened from has a project tagged.
+   *  Controls whether the "כלול גם בסיכומים החודשיים" toggle is shown
+   *  (it only makes sense for project-tagged rows). */
+  rowHasProject,
 }: {
   projects:       ProjectOption[];
   transactionIds: string[];
@@ -43,6 +61,8 @@ export function AssignToProjectMenu({
   onClose:        () => void;
   onDone?:        (updated: number) => void;
   triggerRect:    DOMRect;
+  initialFlags?:  InitialFlags;
+  rowHasProject?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [isPending, startTransition] = useTransition();
@@ -103,6 +123,23 @@ export function AssignToProjectMenu({
         onDone?.(res.updated);
       }
       onClose();
+    });
+  }
+
+  // Per-row flag toggles. Each click sends just that one flag to the server
+  // (other flags are left untouched). Local state mirrors the change so the
+  // checkbox UI updates immediately; revalidation refreshes the row data
+  // on next paint.
+  const [flags, setFlags] = useState<InitialFlags>({
+    isTransfer:               initialFlags?.isTransfer ?? false,
+    excludedFromTotals:       initialFlags?.excludedFromTotals ?? false,
+    includeInMonthlyOverride: initialFlags?.includeInMonthlyOverride ?? false,
+  });
+  function toggleFlag(key: keyof InitialFlags) {
+    const next = !flags[key];
+    setFlags((s) => ({ ...s, [key]: next }));
+    startTransition(async () => {
+      await setTransactionFlags({ transactionIds, [key]: next });
     });
   }
 
@@ -170,6 +207,38 @@ export function AssignToProjectMenu({
         )}
       </div>
 
+      {/* ── Per-row flag toggles ──────────────────────────────────────────
+          Quick access to the same three flags the edit modal exposes,
+          without forcing the user to open the modal for one-click changes
+          while triaging a long list. */}
+      <div className="space-y-1.5 border-t bg-muted/20 px-3 py-2.5 text-[11px]">
+        <FlagToggle
+          checked={!!flags.isTransfer}
+          onChange={() => toggleFlag('isTransfer')}
+          disabled={isPending}
+          label="זוהי העברה בין חשבונות"
+          help="כסף שעבר בין שני חשבונות שלך — לא ייחשב כהוצאה/הכנסה בסיכומים."
+        />
+        <FlagToggle
+          checked={!!flags.excludedFromTotals}
+          onChange={() => toggleFlag('excludedFromTotals')}
+          disabled={isPending}
+          label="אל תספור בסיכומים"
+          help="התנועה תוצג ברשימה אבל לא תיכלל בשום סיכום (תנועה חשבונאית בלבד)."
+        />
+        {/* Always visible — user may toggle it BEFORE picking the project
+            (set the override + assign in two clicks without re-opening the
+            menu). When no project is tagged the flag has no effect, but it
+            stays set so the next project assignment respects it. */}
+        <FlagToggle
+          checked={!!flags.includeInMonthlyOverride}
+          onChange={() => toggleFlag('includeInMonthlyOverride')}
+          disabled={isPending}
+          label="כלול גם בסיכומים החודשיים"
+          help="לתנועות פרויקט שאתה רוצה שיופיעו גם בלוח החודשי (capex+opex)."
+        />
+      </div>
+
       {/* Footer — remove option (only when at least one is tagged) */}
       {showRemove && (
         <div className="border-t">
@@ -196,5 +265,31 @@ export function AssignToProjectMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function FlagToggle({
+  checked, onChange, disabled, label, help,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  disabled: boolean;
+  label: string;
+  help: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2 rounded p-1 hover:bg-accent/30">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        disabled={disabled}
+        className="mt-0.5 shrink-0"
+      />
+      <div className="flex-1">
+        <div className="font-medium text-foreground">{label}</div>
+        <div className="text-[10px] text-muted-foreground leading-snug">{help}</div>
+      </div>
+    </label>
   );
 }

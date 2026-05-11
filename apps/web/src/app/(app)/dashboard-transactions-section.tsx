@@ -28,10 +28,18 @@ export function DashboardTransactionsSection({
   transactions,
   month,
   totalCount,
+  monthTotalIncome,
+  monthTotalExpenses,
 }: {
   transactions: DashboardTx[];
   month: string;
   totalCount: number;
+  /** Optional: full-month income computed server-side. When provided, the
+   *  summary bar uses this instead of summing the visible (limited) array.
+   *  Keeps the strip aligned with the top KPI cards on busy months. */
+  monthTotalIncome?: number;
+  /** Same as above for expenses (positive number, already abs'd). */
+  monthTotalExpenses?: number;
 }) {
   // Default open; sync with localStorage after mount
   const [isOpen, setIsOpen] = useState(true);
@@ -49,10 +57,12 @@ export function DashboardTransactionsSection({
   }
 
   // ── Derived summary figures ──────────────────────────────────────────────
-  const totalExpenses = transactions
+  // Prefer server-computed full-month totals when provided so the strip
+  // matches the top KPI cards (the visible array is capped at 20 rows).
+  const totalExpenses = monthTotalExpenses ?? transactions
     .filter((t) => Number(t.amount) < 0)
     .reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
-  const totalIncome = transactions
+  const totalIncome = monthTotalIncome ?? transactions
     .filter((t) => Number(t.amount) >= 0)
     .reduce((s, t) => s + Number(t.amount), 0);
 

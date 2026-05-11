@@ -22,7 +22,11 @@ export default async function HistoryPage() {
   const months: string[] = [];
   for (let i = 12; i >= 0; i--) months.push(addMonths(cur, -i));
 
-  // Aggregate totals per billing month
+  // Aggregate totals per billing month. Mirrors the dashboard's monthly
+  // cash-flow filter: settlement-basis (excludedFromTotals=true) hides the
+  // CC detail rows already covered by the bank-side settlement line, while
+  // forex CC charges (excludedFromTotals=false) are kept since they hit the
+  // bank immediately and are real cash flow.
   const rows = await db
     .select({
       billingMonth: schema.transactions.billingMonth,
@@ -37,8 +41,6 @@ export default async function HistoryPage() {
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
-        // Settlement-basis accounting: exclude CC detail rows covered by
-        // bank-side settlement. See cash-flow.ts in @fba/db.
         eq(schema.transactions.excludedFromTotals, false),
         // Hide project-tagged txns so a multi-month construction project
         // doesn't make every month look like a cash-flow disaster.

@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import {
   getDb,
   schema,
@@ -473,4 +473,56 @@ export async function restoreTransaction(id: string): Promise<{ ok: boolean; err
   revalidatePath('/grid');
 
   return { ok: true };
+}
+
+// ─── set per-row flags (used by the per-row briefcase menu on /transactions
+//     so the user can toggle כלול/אל תספור/העברה without opening the edit
+//     modal) ──────────────────────────────────────────────────────────────
+export interface SetTransactionFlagsInput {
+  transactionIds: string[];
+  /** Only fields explicitly present here are updated; absent fields are left
+   *  untouched. */
+  isTransfer?: boolean;
+  excludedFromTotals?: boolean;
+  includeInMonthlyOverride?: boolean;
+}
+
+export async function setTransactionFlags(
+  input: SetTransactionFlagsInput,
+): Promise<{ ok: boolean; updated: number; error?: string }> {
+  try {
+    const ctx = await requireSession();
+    if (input.transactionIds.length === 0) return { ok: true, updated: 0 };
+
+    const patch: Partial<{
+      isTransfer: boolean;
+      excludedFromTotals: boolean;
+      includeInMonthlyOverride: boolean;
+    }> = {};
+    if (typeof input.isTransfer === 'boolean') patch.isTransfer = input.isTransfer;
+    if (typeof input.excludedFromTotals === 'boolean') patch.excludedFromTotals = input.excludedFromTotals;
+    if (typeof input.includeInMonthlyOverride === 'boolean') patch.includeInMonthlyOverride = input.includeInMonthlyOverride;
+    if (Object.keys(patch).length === 0) return { ok: true, updated: 0 };
+
+    const db = getDb();
+    const r = await db
+      .update(schema.transactions)
+      .set(patch)
+      .where(
+        and(
+          eq(schema.transactions.householdId, ctx.householdId),
+          inArray(schema.transactions.id, input.transactionIds),
+        ),
+      )
+      .returning({ id: schema.transactions.id });
+
+    revalidatePath('/transactions');
+    revalidatePath('/');
+    revalidatePath('/grid');
+    revalidatePath('/projects');
+    return { ok: true, updated: r.length };
+  } catch (e) {
+    console.error('setTransactionFlags', e);
+    return { ok: false, updated: 0, error: e instanceof Error ? e.message : 'שגיאה' };
+  }
 }

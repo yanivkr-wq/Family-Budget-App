@@ -109,14 +109,20 @@ export function EditTransactionModal(props: {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4 backdrop-blur-sm"
+      // Backdrop: center vertically on tall viewports, top-align on short ones
+      // (so the header is always visible). Full-height-friendly with safe-area
+      // padding so footer doesn't sit under iPhone home-bar.
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-2 backdrop-blur-sm sm:items-center sm:p-4"
       onClick={props.onClose}
     >
       <div
-        className="mt-12 w-full max-w-lg rounded-lg border bg-card p-4 shadow-xl"
+        // Card: full viewport width up to max-w-lg; max-height keeps it on
+        // screen with internal scroll. flex-col so header/footer can stay
+        // pinned and the body scrolls.
+        className="my-4 flex w-full max-w-lg flex-col rounded-lg border bg-card shadow-xl sm:my-0 sm:max-h-[calc(100vh-2rem)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="mb-3 flex items-center justify-between">
+        <header className="flex items-center justify-between border-b px-4 py-3">
           <h2 className="text-base font-semibold">עריכת תנועה</h2>
           <button
             onClick={props.onClose}
@@ -127,13 +133,18 @@ export function EditTransactionModal(props: {
           </button>
         </header>
 
+        {/* Scrollable body — only this part scrolls on overflow */}
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+
         {error && (
           <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             {error}
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        {/* Single column on phones, two columns on sm+ — keeps date pickers
+            and selects from being squished under ~360px */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="תאריך עסקה" required>
             <input
               type="date"
@@ -168,7 +179,7 @@ export function EditTransactionModal(props: {
             </select>
           </Field>
 
-          <Field label="בית עסק" required className="col-span-2">
+          <Field label="בית עסק" required className="col-span-1 sm:col-span-2">
             <input
               type="text"
               value={merchant}
@@ -235,7 +246,7 @@ export function EditTransactionModal(props: {
             </select>
           </Field>
 
-          <Field label="הערות" className="col-span-2">
+          <Field label="הערות" className="col-span-1 sm:col-span-2">
             <input
               type="text"
               value={notes}
@@ -250,7 +261,7 @@ export function EditTransactionModal(props: {
               totals so cross-account moves between the user's own accounts
               don't get double-counted (e.g. salary deposit from business
               → personal would otherwise show as income in BOTH sides). */}
-          <label className="col-span-2 flex items-start gap-2 rounded-md border bg-muted/20 p-2.5 text-xs cursor-pointer">
+          <label className="col-span-1 sm:col-span-2 flex items-start gap-2 rounded-md border bg-muted/20 p-2.5 text-xs cursor-pointer">
             <input
               type="checkbox"
               checked={isTransfer}
@@ -273,7 +284,7 @@ export function EditTransactionModal(props: {
               project-related purchases that should also affect this
               month's discretionary budget). */}
           {t.projectId && (
-            <label className="col-span-2 flex items-start gap-2 rounded-md border border-amber-300/40 bg-amber-50/40 p-2.5 text-xs cursor-pointer dark:border-amber-700/40 dark:bg-amber-900/10">
+            <label className="col-span-1 sm:col-span-2 flex items-start gap-2 rounded-md border border-amber-300/40 bg-amber-50/40 p-2.5 text-xs cursor-pointer dark:border-amber-700/40 dark:bg-amber-900/10">
               <input
                 type="checkbox"
                 checked={includeInMonthlyOverride}
@@ -307,7 +318,7 @@ export function EditTransactionModal(props: {
                 • insights spending math
                 • category summaries / charts
               The row is still visible in lists for audit purposes. */}
-          <label className="col-span-2 flex items-start gap-2 rounded-md border border-slate-300/40 bg-slate-50/40 p-2.5 text-xs cursor-pointer dark:border-slate-700/40 dark:bg-slate-900/10">
+          <label className="col-span-1 sm:col-span-2 flex items-start gap-2 rounded-md border border-slate-300/40 bg-slate-50/40 p-2.5 text-xs cursor-pointer dark:border-slate-700/40 dark:bg-slate-900/10">
             <input
               type="checkbox"
               checked={excludedFromTotals}
@@ -329,7 +340,10 @@ export function EditTransactionModal(props: {
           </label>
         </div>
 
-        <footer className="mt-4 flex items-center justify-end gap-2 border-t pt-3">
+        </div>
+        {/* Pinned footer — outside the scrollable body so action buttons
+            are always visible even when the form content overflows. */}
+        <footer className="flex items-center justify-end gap-2 border-t bg-card px-4 py-3">
           <button
             onClick={props.onClose}
             disabled={isPending}
