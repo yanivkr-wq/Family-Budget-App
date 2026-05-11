@@ -232,6 +232,27 @@ You're done. Total time: ~30-45 min.
 
 When you've made code changes locally and want to push them to prod:
 
+### Auto-deploy (recommended): cron poller
+
+Set up once, then EVERY `git push origin main` triggers a deploy within ~2 min:
+
+```bash
+# On the server, one-time setup:
+chmod +x /opt/family-budget/infra/auto-deploy.sh
+sudo touch /var/log/auto-deploy.log && sudo chmod 644 /var/log/auto-deploy.log
+( crontab -l 2>/dev/null; echo '*/2 * * * * /opt/family-budget/infra/auto-deploy.sh >> /var/log/auto-deploy.log 2>&1' ) | crontab -
+crontab -l   # verify the entry is there
+```
+
+The poller fetches origin/main every 2 minutes; if HEAD differs, it runs
+`update-prod.sh` (build → recreate → migrations). Concurrent runs are
+prevented by a flock guard. Successful no-op exits silently to keep the
+log clean. Watch the log:
+
+```bash
+tail -f /var/log/auto-deploy.log
+```
+
 ### Fastest path: `infra/update-prod.sh`
 
 ```bash
