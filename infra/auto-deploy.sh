@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Family Budget App — auto-deploy poller
+# Family Budget App — auto-deploy poller (smoke-tested 2026-05-12)
 # ============================================================================
 # Runs from cron every couple of minutes. Checks if origin/main has new
 # commits beyond what HEAD points at; if so, runs update-prod.sh to deploy.
