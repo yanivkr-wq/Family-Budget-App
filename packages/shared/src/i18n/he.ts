@@ -4,7 +4,7 @@ type Loosen<T> = T extends string ? string : { [K in keyof T]: Loosen<T[K]> };
 
 export const he = {
   app: {
-    name: 'תקציב משפחתי',
+    name: 'תקציב משפחתי ✨',
     tagline: 'ניהול תקציב חכם לבית',
   },
   nav: {
