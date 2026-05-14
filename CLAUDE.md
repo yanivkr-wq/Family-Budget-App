@@ -32,7 +32,8 @@ This includes:
 3. Update every affected field: `dataSource`, `dataSourceNotes`, `filters`, `mathRule`, `exclusions`, `timeScope`, `caveats`.
 4. If the fix corrected a real bug, add a short `caveats` note like "Recent fix: previously was X, now Y."
 5. If you added a new widget, add a new entry with a stable `id` and the correct `pageId`.
-6. Don't ship until the spec matches the new code.
+6. **Run `pnpm validate:specs` and confirm 0 errors.** This script (in `scripts/validate-widget-specs.ts`) pattern-matches each spec against its referenced source file and fails on hard drift — e.g. `dataSource='bank'` without the `accounts.type` filter, or a `queryFunction` that no longer exists. Warnings are best-effort heuristics; only errors must be zero.
+7. Don't ship until the spec matches the new code AND `pnpm validate:specs` exits clean.
 
 There's an ESLint guard on `apps/web/src/app/(app)/insights/queries.ts` preventing direct calls to `currentBillingMonth()` / `activeBillingMonth()` — that's the related guardrail for the single-source-of-truth contract on the insights page anchor month. Don't bypass it without lifting the rule explicitly in code review.
 

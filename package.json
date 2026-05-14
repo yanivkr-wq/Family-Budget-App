@@ -16,6 +16,7 @@
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "validate:specs": "tsx scripts/validate-widget-specs.ts",
     "db:generate": "pnpm --filter @fba/db generate",
     "db:migrate": "pnpm --filter @fba/db migrate",
     "db:seed": "pnpm --filter @fba/db seed",
