@@ -87,10 +87,12 @@ const PURPOSE_LABEL = {
   business: 'עסקי',
   shared: 'משותף',
 };
+// Brand book §1: tokenized purpose pills. Personal=primary, business=accent,
+// shared=success. Each uses the soft variant for the bg.
 const PURPOSE_COLOR = {
-  personal: 'bg-blue-100 text-blue-700',
-  business: 'bg-amber-100 text-amber-700',
-  shared: 'bg-green-100 text-green-700',
+  personal: 'bg-primary-soft text-primary',
+  business: 'bg-accent-soft text-accent',
+  shared: 'bg-success-soft text-success',
 };
 
 function billingLabel(a: AccountRow): string {
@@ -336,9 +338,10 @@ function AccountForm({
             )}
           </fieldset>
 
-          {/* Opening balance — anchor for cumulative balance KPI */}
-          <fieldset className="space-y-3 rounded-lg border border-dashed border-emerald-500/40 bg-emerald-50/40 p-3 dark:bg-emerald-950/20">
-            <legend className="px-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+          {/* Opening balance — anchor for cumulative balance KPI. Brand book
+              §1: success tone (positive financial state). */}
+          <fieldset className="space-y-3 rounded-xl border border-dashed border-success/40 bg-success-soft/50 p-3">
+            <legend className="px-1 text-xs font-semibold text-success">
               יתרת פתיחה (לחישוב יתרה מצטברת בפועל)
             </legend>
 
@@ -372,7 +375,7 @@ function AccountForm({
               </label>
             </div>
 
-            <p className="rounded-md bg-emerald-100/60 px-2 py-1.5 text-[11px] leading-relaxed text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-100">
+            <p className="rounded-md bg-success-soft px-2 py-1.5 text-[11px] leading-relaxed text-success">
               💡 <strong>הדרך הקלה ביותר:</strong> פתח את אתר הבנק עכשיו, העתק את היתרה הנוכחית
               בעו&quot;ש, הדבק כאן + סמן בתאריך &quot;היום&quot;. שמור. מעכשיו, היתרה לכל חודש בעבר
               ובעתיד תחושב אוטומטית מהתנועות במערכת — כולל תוספת/עדכון/מחיקה. אין צורך לדעת
@@ -678,7 +681,7 @@ export function AccountsClient({ initialAccounts }: { initialAccounts: AccountRo
                       <span className="text-xs text-muted-foreground">מיידי</span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-xs">
-                        <Zap className="size-3 text-sky-500" />
+                        <Zap className="size-3 text-primary" />
                         <span>גזירה {a.cutoffDay} · חיוב {a.chargeDay}</span>
                       </span>
                     )}
@@ -708,7 +711,7 @@ export function AccountsClient({ initialAccounts }: { initialAccounts: AccountRo
                         return cum < 0
                           ? 'text-destructive font-medium'
                           : cum > 0
-                            ? 'text-emerald-600 font-medium'
+                            ? 'text-success font-medium'
                             : 'text-muted-foreground';
                       })(),
                     )}
@@ -727,7 +730,7 @@ export function AccountsClient({ initialAccounts }: { initialAccounts: AccountRo
                       className={cn(
                         'rounded-full px-2 py-0.5 text-[11px] font-medium',
                         a.isActive
-                          ? 'bg-green-100 text-green-700'
+                          ? 'bg-success-soft text-success'
                           : 'bg-muted text-muted-foreground',
                       )}
                     >

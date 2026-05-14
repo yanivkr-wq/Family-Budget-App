@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 
 const CATEGORY_BADGE: Record<string, { label: string; className: string }> = {
   bug:     { label: 'באג',         className: 'bg-destructive/10 text-destructive' },
-  ux:      { label: 'UX',          className: 'bg-amber-100 text-amber-700' },
+  ux:      { label: 'UX',          className: 'bg-warning-soft text-warning' },
   feature: { label: 'פיצ׳ר',       className: 'bg-primary/10 text-primary' },
   other:   { label: 'אחר',         className: 'bg-muted text-muted-foreground' },
 };
@@ -34,7 +34,7 @@ const CATEGORY_BADGE: Record<string, { label: string; className: string }> = {
 const STATUS_BADGE: Record<string, { label: string; className: string; icon: React.ComponentType<{ className?: string }> }> = {
   open:               { label: 'פתוח',           className: 'text-muted-foreground',    icon: Inbox },
   in_progress:        { label: 'בעבודה',         className: 'text-primary',             icon: Hammer },
-  pending_validation: { label: 'ממתין לאימות',   className: 'text-amber-600 dark:text-amber-400', icon: Eye },
+  pending_validation: { label: 'ממתין לאימות',   className: 'text-warning',             icon: Eye },
   resolved:           { label: 'נפתר',           className: 'text-success',             icon: CircleCheck },
   dismissed:           { label: 'נדחה',          className: 'text-muted-foreground/60', icon: Ban },
 };
@@ -276,10 +276,10 @@ function FeedbackCard({
   //   • dismissed → grayed-out
   //   • open      → default
   const cardClasses = cn(
-    'rounded-md border p-3 transition-colors',
-    item.status === 'resolved'           && 'border-success/40 bg-success/5',
-    item.status === 'in_progress'        && 'border-primary/40 bg-primary/5',
-    item.status === 'pending_validation' && 'border-amber-300/50 bg-amber-50 dark:border-amber-700/40 dark:bg-amber-900/10',
+    'rounded-xl border p-3 transition-colors',
+    item.status === 'resolved'           && 'border-success/40 bg-success-soft/60',
+    item.status === 'in_progress'        && 'border-primary/40 bg-primary-soft/60',
+    item.status === 'pending_validation' && 'border-warning/40 bg-warning-soft',
     item.status === 'dismissed'          && 'border-border bg-muted/20 opacity-60',
     (!item.status || item.status === 'open') && 'border-border bg-card',
   );
@@ -394,7 +394,7 @@ function FeedbackCard({
               onClick={() => onChangeStatus(item.id, 'pending_validation')}
               disabled={disabled}
               title="ממתין לאימות (לבדיקה לפני סגירה)"
-              className="rounded-md p-1.5 text-amber-600 hover:bg-amber-100 dark:text-amber-400 dark:hover:bg-amber-900/30"
+              className="rounded-md p-1.5 text-warning hover:bg-warning-soft"
             >
               <Eye className="size-3.5" />
             </button>

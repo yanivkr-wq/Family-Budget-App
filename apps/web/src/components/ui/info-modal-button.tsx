@@ -63,7 +63,7 @@ export function InfoModalButton({
           onClick={(e) => { if (e.target === backdropRef.current) setOpen(false); }}
         >
           <div
-            className="relative w-full max-w-md rounded-xl border bg-card shadow-2xl max-h-[85vh] flex flex-col"
+            className="relative w-full max-w-md rounded-2xl border bg-card shadow-2xl max-h-[85vh] flex flex-col"
             dir="rtl"
             onClick={(e) => e.stopPropagation()}
           >
@@ -97,7 +97,7 @@ export function InfoModalButton({
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                className="btn-primary px-4"
               >
                 הבנתי
               </button>

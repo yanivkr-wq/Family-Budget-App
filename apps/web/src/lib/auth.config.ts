@@ -17,7 +17,8 @@ export const authConfig = {
         pathname.startsWith('/sign-in/') ||
         pathname.startsWith('/api/auth') ||
         pathname.startsWith('/_next') ||
-        pathname === '/favicon.ico';
+        pathname === '/favicon.ico' ||
+        pathname.startsWith('/design-preview');
       if (isPublic) return true;
       if (auth?.user) return true;
       const url = new URL('/sign-in', nextUrl.origin);

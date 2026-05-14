@@ -671,9 +671,10 @@ export function TransactionsList(props: {
                         // dashed background so they're clearly distinguishable
                         // from real charges.
                         t.isProjected && 'opacity-60 italic bg-muted/20',
-                        // Amber flash when arriving via ?highlight=<id> from
-                        // the global command palette. Clears after 3 seconds.
-                        highlightId === t.id && '!bg-amber-100 dark:!bg-amber-900/40 ring-2 ring-amber-400',
+                        // Warning-tone flash when arriving via ?highlight=<id>
+                        // from the global command palette. Clears after 3
+                        // seconds. Tokenized (brand book §1).
+                        highlightId === t.id && '!bg-warning-soft ring-2 ring-warning',
                       )}
                     >
                       {/* Selection checkbox (always-on bookend) — vertically
@@ -945,8 +946,8 @@ export function TransactionsList(props: {
                           income={sumIncome(carryOver)}
                           installments={sumInstallments(carryOver)}
                           recurring={sumRecurring(carryOver)}
-                          colorClass="text-amber-700 dark:text-amber-400"
-                          bgClass="bg-amber-50/40 border-amber-200/50 dark:bg-amber-900/10 dark:border-amber-800/30"
+                          colorClass="text-warning"
+                          bgClass="bg-warning-soft border-warning/20"
                         />
                         {sortedSlice(carryOver, props.cycleChargeDate).map((t) => renderRow(t, props.cycleChargeDate))}
                       </>
@@ -965,8 +966,8 @@ export function TransactionsList(props: {
                           income={sumIncome(currentCycle)}
                           installments={sumInstallments(currentCycle)}
                           recurring={sumRecurring(currentCycle)}
-                          colorClass={isCycleCharged ? 'text-success' : 'text-amber-700 dark:text-amber-400'}
-                          bgClass={isCycleCharged ? 'bg-success/5 border-success/20' : 'bg-amber-50/60 border-amber-200/60 dark:bg-amber-900/10 dark:border-amber-800/40'}
+                          colorClass={isCycleCharged ? 'text-success' : 'text-warning'}
+                          bgClass={isCycleCharged ? 'bg-success-soft border-success/20' : 'bg-warning-soft border-warning/20'}
                         />
                         {sortedSlice(currentCycle, props.cycleChargeDate).map((t) => renderRow(t, props.cycleChargeDate))}
                       </>
@@ -983,8 +984,8 @@ export function TransactionsList(props: {
                           income={sumIncome(nextCycle)}
                           installments={sumInstallments(nextCycle)}
                           recurring={sumRecurring(nextCycle)}
-                          colorClass="text-blue-700 dark:text-blue-300"
-                          bgClass="bg-blue-50/50 border-blue-200/50 dark:bg-blue-900/10 dark:border-blue-800/40"
+                          colorClass="text-accent"
+                          bgClass="bg-accent-soft border-accent/20"
                         />
                         {sortedSlice(nextCycle, props.nextCycleChargeDate).map((t) => renderRow(t, props.nextCycleChargeDate))}
                       </>

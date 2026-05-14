@@ -1,0 +1,22 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "overrides": [
+    {
+      "files": ["src/app/(app)/insights/queries.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@fba/db",
+                "importNames": ["currentBillingMonth", "activeBillingMonth"],
+                "message": "Don't call month-resolution helpers inside /insights/queries.ts. Accept the month as an `anchorMonth: string` parameter from the caller (insights/page.tsx is the single source of truth). See the contract note at the top of this file."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

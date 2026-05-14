@@ -10,7 +10,21 @@
  */
 
 import { useEffect, useRef, useState, useTransition } from 'react';
-import { Plus, Trash2, X, Mail, MessageCircle, Smartphone, User, Send, Loader2 } from 'lucide-react';
+import {
+  Plus,
+  X,
+  Mail,
+  MessageCircle,
+  Smartphone,
+  User,
+  Send,
+  Loader2,
+  CheckCircle2,
+  Circle,
+  Settings2,
+  CalendarCheck,
+  Sparkles,
+} from 'lucide-react';
 import {
   createNotificationTask,
   testFireReminder,
@@ -152,39 +166,159 @@ export function NotificationModal({
     };
   }, [onClose]);
 
-  function addReminder(offsetDays = 0) {
-    setReminders((prev) => [
-      ...prev,
-      {
-        offsetDays,
-        fireTime: '09:00',
-        channels: { in_app: true, email: false, whatsapp: false },
-        recipientContactIds: defaultContactId ? [defaultContactId] : [],
-        enabled: true,
-      },
-    ]);
+  // ── Reminder mutators ────────────────────────────────────────────────
+  //
+  // Option-A model: the user picks WHICH offsets to remind on via preset
+  // chips (or a custom-offset input). Channels / time / recipients are
+  // GLOBAL by default — set once on a panel below the chips, applied to
+  // every reminder. An "advanced mode" toggle reveals per-reminder
+  // overrides for power users.
+  //
+  // The underlying ReminderInput[] schema is unchanged so save / load /
+  // server actions don't need to know about the global vs per-reminder
+  // distinction. We just keep all the rows in sync when the global panel
+  // mutates.
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [showCustomOffset, setShowCustomOffset] = useState(false);
+  const [customOffsetInput, setCustomOffsetInput] = useState('');
+
+  // Global channel / time / recipient values — derived from the first
+  // reminder, or sensible defaults when the list is empty.
+  const firstReminder = reminders[0];
+  const globalFireTime = (firstReminder?.fireTime ?? '09:00').slice(0, 5);
+  const globalChannels: ReminderChannelPrefs = firstReminder?.channels ?? {
+    in_app: true,
+    email: false,
+    whatsapp: false,
+  };
+  const globalRecipientIds = firstReminder?.recipientContactIds ?? (defaultContactId ? [defaultContactId] : []);
+
+  function hasOffset(offsetDays: number): boolean {
+    return reminders.some((r) => r.offsetDays === offsetDays);
   }
 
+  /**
+   * Add a reminder at the given offset, using the current global channels /
+   * time / recipients. Inserted in sorted order (largest offset first) so
+   * the resolved-date summary reads chronologically.
+   */
+  function addReminderAt(offsetDays: number) {
+    if (offsetDays < 0 || offsetDays > 365) return;
+    setReminders((prev) => {
+      if (prev.some((r) => r.offsetDays === offsetDays)) return prev;
+      const next: ReminderInput = {
+        offsetDays,
+        fireTime: globalFireTime + ':00',
+        channels: { ...globalChannels },
+        recipientContactIds: [...globalRecipientIds],
+        enabled: true,
+      };
+      return [...prev, next].sort((a, b) => b.offsetDays - a.offsetDays);
+    });
+  }
+
+  /** Toggle a preset on/off. On = add a reminder at that offset; off =
+   *  remove the existing one. */
+  function togglePresetOffset(offsetDays: number) {
+    if (hasOffset(offsetDays)) {
+      setReminders((prev) => prev.filter((r) => r.offsetDays !== offsetDays));
+    } else {
+      addReminderAt(offsetDays);
+    }
+  }
+
+  /** Global time setter — propagates to every reminder. */
+  function setGlobalFireTime(time: string) {
+    setReminders((prev) => prev.map((r) => ({ ...r, fireTime: time + ':00' })));
+  }
+
+  /** Global channel toggle — flips for every reminder so they stay
+   *  consistent. Advanced mode re-introduces per-reminder overrides. */
+  function toggleGlobalChannel(ch: keyof ReminderChannelPrefs) {
+    setReminders((prev) =>
+      prev.map((r) => ({
+        ...r,
+        channels: { ...r.channels, [ch]: !globalChannels[ch] },
+      })),
+    );
+  }
+
+  /** Global recipient toggle. Recipients are only meaningful for email /
+   *  whatsapp (in-app is household-wide), so the picker is hidden when
+   *  neither channel is on. */
+  function toggleGlobalRecipient(contactId: string) {
+    setReminders((prev) =>
+      prev.map((r) => {
+        const set = new Set(r.recipientContactIds ?? []);
+        if (set.has(contactId)) set.delete(contactId);
+        else set.add(contactId);
+        return { ...r, recipientContactIds: Array.from(set) };
+      }),
+    );
+  }
+
+  // Per-reminder mutators — only surfaced in advanced mode.
   function updateReminder(idx: number, patch: Partial<ReminderInput>) {
-    setReminders((prev) => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+    setReminders((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   }
   function toggleChannel(idx: number, ch: keyof ReminderChannelPrefs) {
-    setReminders((prev) => prev.map((r, i) => i === idx
-      ? { ...r, channels: { ...r.channels, [ch]: !r.channels[ch] } }
-      : r,
-    ));
+    setReminders((prev) =>
+      prev.map((r, i) =>
+        i === idx ? { ...r, channels: { ...r.channels, [ch]: !r.channels[ch] } } : r,
+      ),
+    );
   }
   function toggleRecipient(idx: number, contactId: string) {
-    setReminders((prev) => prev.map((r, i) => {
-      if (i !== idx) return r;
-      const current = new Set(r.recipientContactIds ?? []);
-      if (current.has(contactId)) current.delete(contactId);
-      else current.add(contactId);
-      return { ...r, recipientContactIds: Array.from(current) };
-    }));
+    setReminders((prev) =>
+      prev.map((r, i) => {
+        if (i !== idx) return r;
+        const current = new Set(r.recipientContactIds ?? []);
+        if (current.has(contactId)) current.delete(contactId);
+        else current.add(contactId);
+        return { ...r, recipientContactIds: Array.from(current) };
+      }),
+    );
   }
   function removeReminder(idx: number) {
     setReminders((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  /** Custom offset submit (from the inline "+ מותאם..." picker). */
+  function submitCustomOffset() {
+    const n = Number(customOffsetInput);
+    if (Number.isFinite(n) && n >= 0 && n <= 365) {
+      addReminderAt(n);
+      setCustomOffsetInput('');
+      setShowCustomOffset(false);
+    }
+  }
+
+  /** Resolve a YYYY-MM-DD due date − offsetDays back into a DD/MM/YYYY
+   *  string for the summary panel. Defensive against an unparseable
+   *  dueDate (returns empty string). */
+  function resolveReminderDate(offsetDays: number): string {
+    if (!dueDate) return '';
+    const d = new Date(dueDate);
+    if (Number.isNaN(d.getTime())) return '';
+    d.setDate(d.getDate() - offsetDays);
+    return d.toLocaleDateString('he-IL', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  }
+
+  /** Pretty label for an offset — preset name if it matches one, else fallback. */
+  function labelForOffset(days: number): string {
+    const p = OFFSET_PRESETS.find((x) => x.days === days);
+    if (p) return p.label;
+    if (days === 0) return 'ביום היעד';
+    return `${days} ימים לפני`;
+  }
+
+  /** Comma-separated list of active channel names for the summary panel. */
+  function activeChannelsLabel(): string {
+    const names: string[] = [];
+    if (globalChannels.in_app) names.push('באפליקציה');
+    if (globalChannels.email) names.push('דוא"ל');
+    if (globalChannels.whatsapp) names.push('WhatsApp');
+    return names.length === 0 ? '(לא נבחר ערוץ)' : names.join(' · ');
   }
 
   /** Fire the FIRST reminder right now via the worker test endpoint.
@@ -366,144 +500,322 @@ export function NotificationModal({
             </div>
           </div>
 
-          {/* Reminders builder */}
-          <fieldset className="rounded-md border border-dashed border-muted-foreground/30 p-3 space-y-3">
-            <legend className="px-1 text-xs font-medium text-muted-foreground">
+          {/* Reminders — Option A: preset chips drive add/remove, channels + time global */}
+          <fieldset className="rounded-xl border border-dashed border-muted-foreground/30 p-4 space-y-4">
+            <legend className="flex items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
               תזכורות <span className="font-normal">(לפחות אחת)</span>
+              <span className="ms-auto inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold tabular-nums text-muted-foreground">
+                {reminders.length}
+              </span>
             </legend>
 
-            {/* Quick presets */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-2xs text-muted-foreground">הוספה מהירה:</span>
-              {OFFSET_PRESETS.map((p) => (
+            {/* Step 1: preset chips — clicking ADDS or REMOVES a reminder
+                at that offset. The active state is the source of truth for
+                what gets saved. */}
+            <div className="space-y-2">
+              <p className="text-2xs text-muted-foreground">מתי להזכיר? (לחץ להפעלה/כיבוי)</p>
+              <div className="flex flex-wrap gap-1.5">
+                {OFFSET_PRESETS.map((p) => {
+                  const active = hasOffset(p.days);
+                  return (
+                    <button
+                      key={p.days}
+                      type="button"
+                      onClick={() => togglePresetOffset(p.days)}
+                      aria-pressed={active}
+                      className={
+                        active
+                          ? 'inline-flex items-center gap-1.5 rounded-full bg-primary px-3 py-1 text-2xs font-medium text-primary-foreground shadow-sm'
+                          : 'inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-1 text-2xs font-medium text-foreground hover:bg-muted/40'
+                      }
+                    >
+                      {active ? <CheckCircle2 className="size-3" /> : <Circle className="size-3 opacity-40" />}
+                      {p.label}
+                    </button>
+                  );
+                })}
                 <button
-                  key={p.days}
                   type="button"
-                  onClick={() => addReminder(p.days)}
-                  className="rounded-full border bg-card px-2 py-0.5 text-2xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  onClick={() => setShowCustomOffset((s) => !s)}
+                  className="inline-flex items-center gap-1 rounded-full border border-dashed bg-card px-3 py-1 text-2xs font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground"
                 >
-                  {p.label}
+                  <Plus className="size-3" />
+                  מותאם...
                 </button>
-              ))}
+              </div>
+              {/* Inline custom-offset input */}
+              {showCustomOffset && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed bg-card/50 p-2">
+                  <label className="flex items-center gap-1.5 text-2xs">
+                    ימים לפני:
+                    <input
+                      type="number"
+                      min="0"
+                      max="365"
+                      value={customOffsetInput}
+                      onChange={(e) => setCustomOffsetInput(e.target.value)}
+                      placeholder="למשל 21"
+                      className="w-20 rounded border bg-background px-1.5 py-0.5 text-2xs tabular-nums"
+                      autoFocus
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={submitCustomOffset}
+                    className="rounded-md bg-primary px-2.5 py-0.5 text-2xs font-medium text-primary-foreground hover:bg-primary/90"
+                  >
+                    הוסף
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowCustomOffset(false); setCustomOffsetInput(''); }}
+                    className="rounded-md px-2 py-0.5 text-2xs text-muted-foreground hover:bg-muted/40"
+                  >
+                    ביטול
+                  </button>
+                </div>
+              )}
             </div>
 
-            <ul className="space-y-2">
-              {reminders.map((r, idx) => (
-                <li key={idx} className="rounded-md border bg-background p-2 space-y-1.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="flex items-center gap-1 text-2xs">
-                      <input
-                        type="checkbox"
-                        checked={r.enabled}
-                        onChange={(e) => updateReminder(idx, { enabled: e.target.checked })}
-                        className="size-3.5"
-                      />
-                      פעיל
-                    </label>
-                    <span className="text-2xs text-muted-foreground">·</span>
-                    <label className="flex items-center gap-1 text-2xs">
-                      ימים לפני:
-                      <input
-                        type="number"
-                        min="0"
-                        max="365"
-                        value={r.offsetDays}
-                        onChange={(e) => updateReminder(idx, { offsetDays: Number(e.target.value) })}
-                        className="w-14 rounded border bg-background px-1.5 py-0.5 text-2xs tabular-nums"
-                      />
-                    </label>
-                    <label className="flex items-center gap-1 text-2xs">
-                      שעה:
-                      <input
-                        type="time"
-                        value={r.fireTime.slice(0, 5)}
-                        onChange={(e) => updateReminder(idx, { fireTime: e.target.value })}
-                        className="rounded border bg-background px-1.5 py-0.5 text-2xs tabular-nums"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => removeReminder(idx)}
-                      className="ms-auto rounded-md p-1 text-destructive hover:bg-destructive/10"
-                      title="מחק תזכורת זו"
-                      aria-label="מחק תזכורת זו"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-2xs text-muted-foreground">ערוצים:</span>
-                    <ChannelChip
-                      icon={Smartphone}
-                      label="באפליקציה"
-                      active={r.channels.in_app}
-                      onClick={() => toggleChannel(idx, 'in_app')}
+            {/* Step 2: global channels + time. In standard mode applies to
+                EVERY reminder; advanced mode (toggle below) lets the user
+                override per row. Hidden when no reminders are configured —
+                nothing to control. */}
+            {reminders.length > 0 && !advancedMode && (
+              <div className="rounded-lg border bg-muted/10 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Settings2 className="size-3.5 text-muted-foreground" />
+                  <h4 className="text-2xs font-semibold text-muted-foreground">
+                    ערוצים ושעה (חל על כל התזכורות)
+                  </h4>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-2xs text-muted-foreground">שעת שליחה</span>
+                    <input
+                      type="time"
+                      value={globalFireTime}
+                      onChange={(e) => setGlobalFireTime(e.target.value)}
+                      className="w-full rounded border bg-background px-2 py-1 text-2xs tabular-nums text-right"
                     />
-                    <ChannelChip
-                      icon={Mail}
-                      label='דוא"ל'
-                      active={r.channels.email}
-                      onClick={() => toggleChannel(idx, 'email')}
-                    />
-                    <ChannelChip
-                      icon={MessageCircle}
-                      label="WhatsApp"
-                      active={r.channels.whatsapp}
-                      onClick={() => toggleChannel(idx, 'whatsapp')}
-                    />
-                  </div>
-                  {/* Recipient picker — only shown when there are real contacts AND
-                      at least one per-recipient channel (email/whatsapp) is on.
-                      The bell ("באפליקציה") is shared at household level so
-                      doesn't need a recipient. */}
-                  {contacts.length > 0 && (r.channels.email || r.channels.whatsapp) && (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-2xs text-muted-foreground">שולחים אל:</span>
-                      {contacts.map((c) => {
-                        const selected = (r.recipientContactIds ?? []).includes(c.id);
-                        const lacksPhone = !c.phoneE164;
-                        const lacksEmail = !c.email;
-                        // Surface a hint when the contact can't actually be
-                        // reached on a channel the user enabled — they'll
-                        // just be skipped at dispatch time.
-                        const warns: string[] = [];
-                        if (r.channels.whatsapp && lacksPhone) warns.push('אין טלפון');
-                        if (r.channels.email    && lacksEmail) warns.push('אין דוא"ל');
-                        const title = warns.length > 0 ? warns.join(' · ') : c.label;
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => toggleRecipient(idx, c.id)}
-                            aria-pressed={selected}
-                            title={title}
-                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition-colors ${
-                              selected
-                                ? 'border-accent bg-accent/15 text-accent'
-                                : 'border-muted-foreground/30 bg-card text-muted-foreground hover:bg-muted/40'
-                            }`}
-                          >
-                            <User className="size-3" aria-hidden />
-                            {c.label}
-                            {warns.length > 0 && selected && (
-                              <span className="text-warning">⚠</span>
-                            )}
-                          </button>
-                        );
-                      })}
+                  </label>
+                  <div>
+                    <span className="mb-1 block text-2xs text-muted-foreground">ערוצים</span>
+                    <div className="flex flex-wrap gap-1">
+                      <ChannelChip
+                        icon={Smartphone}
+                        label="באפליקציה"
+                        active={globalChannels.in_app}
+                        onClick={() => toggleGlobalChannel('in_app')}
+                      />
+                      <ChannelChip
+                        icon={Mail}
+                        label='דוא"ל'
+                        active={globalChannels.email}
+                        onClick={() => toggleGlobalChannel('email')}
+                      />
+                      <ChannelChip
+                        icon={MessageCircle}
+                        label="WhatsApp"
+                        active={globalChannels.whatsapp}
+                        onClick={() => toggleGlobalChannel('whatsapp')}
+                      />
                     </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+                  </div>
+                </div>
+                {/* Recipient picker — global. Same visibility rule as before:
+                    only shown when email or whatsapp is on (in-app is
+                    household-wide and doesn't need a target contact). */}
+                {contacts.length > 0 && (globalChannels.email || globalChannels.whatsapp) && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-2xs text-muted-foreground">שולחים אל:</span>
+                    {contacts.map((c) => {
+                      const selected = globalRecipientIds.includes(c.id);
+                      const warns: string[] = [];
+                      if (globalChannels.whatsapp && !c.phoneE164) warns.push('אין טלפון');
+                      if (globalChannels.email && !c.email) warns.push('אין דוא"ל');
+                      const title = warns.length > 0 ? warns.join(' · ') : c.label;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => toggleGlobalRecipient(c.id)}
+                          aria-pressed={selected}
+                          title={title}
+                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition-colors ${
+                            selected
+                              ? 'border-accent bg-accent/15 text-accent'
+                              : 'border-muted-foreground/30 bg-card text-muted-foreground hover:bg-muted/40'
+                          }`}
+                        >
+                          <User className="size-3" aria-hidden />
+                          {c.label}
+                          {warns.length > 0 && selected && <span className="text-warning">⚠</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setAdvancedMode(true)}
+                  className="text-2xs text-accent underline-offset-2 hover:underline"
+                >
+                  ◌ הגדר ערוצים נפרדים לכל תזכורת (מתקדם)
+                </button>
+              </div>
+            )}
 
-            <button
-              type="button"
-              onClick={() => addReminder(0)}
-              className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-xs hover:bg-muted/40"
-            >
-              <Plus className="size-3" /> הוסף תזכורת
-            </button>
+            {/* Advanced mode — per-reminder editor list. Same controls as
+                the original layout for users who genuinely need different
+                channels per reminder. The "back to standard mode" button
+                resets all reminders to match the first one's channels/time
+                (so the user doesn't get stuck in a confusing state). */}
+            {reminders.length > 0 && advancedMode && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-2xs font-semibold text-muted-foreground">
+                    הגדרות נפרדות לכל תזכורת
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Reset everything to the first row's settings, then exit advanced.
+                      if (firstReminder) {
+                        setReminders((prev) =>
+                          prev.map((r) => ({
+                            ...r,
+                            fireTime: firstReminder.fireTime,
+                            channels: { ...firstReminder.channels },
+                            recipientContactIds: [...(firstReminder.recipientContactIds ?? [])],
+                          })),
+                        );
+                      }
+                      setAdvancedMode(false);
+                    }}
+                    className="text-2xs text-accent underline-offset-2 hover:underline"
+                  >
+                    ↑ חזור למצב סטנדרטי
+                  </button>
+                </div>
+                <ul className="space-y-2">
+                  {reminders.map((r, idx) => (
+                    <li key={idx} className="rounded-md border bg-background p-2 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex items-center gap-1 text-2xs">
+                          <input
+                            type="checkbox"
+                            checked={r.enabled}
+                            onChange={(e) => updateReminder(idx, { enabled: e.target.checked })}
+                            className="size-3.5"
+                          />
+                          פעיל
+                        </label>
+                        <span className="text-2xs font-medium">{labelForOffset(r.offsetDays)}</span>
+                        <span className="text-2xs text-muted-foreground tabular-nums">
+                          ({resolveReminderDate(r.offsetDays)})
+                        </span>
+                        <label className="ms-auto flex items-center gap-1 text-2xs">
+                          שעה:
+                          <input
+                            type="time"
+                            value={r.fireTime.slice(0, 5)}
+                            onChange={(e) => updateReminder(idx, { fireTime: e.target.value })}
+                            className="rounded border bg-background px-1.5 py-0.5 text-2xs tabular-nums"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => removeReminder(idx)}
+                          className="rounded-md p-1 text-destructive hover:bg-destructive/10"
+                          title="מחק תזכורת זו"
+                          aria-label="מחק תזכורת זו"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-2xs text-muted-foreground">ערוצים:</span>
+                        <ChannelChip
+                          icon={Smartphone}
+                          label="באפליקציה"
+                          active={r.channels.in_app}
+                          onClick={() => toggleChannel(idx, 'in_app')}
+                        />
+                        <ChannelChip
+                          icon={Mail}
+                          label='דוא"ל'
+                          active={r.channels.email}
+                          onClick={() => toggleChannel(idx, 'email')}
+                        />
+                        <ChannelChip
+                          icon={MessageCircle}
+                          label="WhatsApp"
+                          active={r.channels.whatsapp}
+                          onClick={() => toggleChannel(idx, 'whatsapp')}
+                        />
+                      </div>
+                      {contacts.length > 0 && (r.channels.email || r.channels.whatsapp) && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-2xs text-muted-foreground">שולחים אל:</span>
+                          {contacts.map((c) => {
+                            const selected = (r.recipientContactIds ?? []).includes(c.id);
+                            const warns: string[] = [];
+                            if (r.channels.whatsapp && !c.phoneE164) warns.push('אין טלפון');
+                            if (r.channels.email && !c.email) warns.push('אין דוא"ל');
+                            const title = warns.length > 0 ? warns.join(' · ') : c.label;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => toggleRecipient(idx, c.id)}
+                                aria-pressed={selected}
+                                title={title}
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition-colors ${
+                                  selected
+                                    ? 'border-accent bg-accent/15 text-accent'
+                                    : 'border-muted-foreground/30 bg-card text-muted-foreground hover:bg-muted/40'
+                                }`}
+                              >
+                                <User className="size-3" aria-hidden />
+                                {c.label}
+                                {warns.length > 0 && selected && <span className="text-warning">⚠</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Step 3: resolved-date summary. Tells the user the EXACT
+                dates the reminders will fire so they don't have to mentally
+                subtract days from the due date. */}
+            {reminders.length > 0 && (
+              <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-3.5 text-accent" />
+                  <h4 className="text-2xs font-semibold text-accent">סיכום</h4>
+                </div>
+                <p className="text-2xs">
+                  <span className="font-semibold tabular-nums">{reminders.length} תזכורות</span>
+                  {' '}יישלחו ב-{advancedMode ? '(הגדרות נפרדות לכל אחת)' : `${activeChannelsLabel()} בשעה ${globalFireTime}`}:
+                </p>
+                <ul className="space-y-0.5 text-2xs text-muted-foreground">
+                  {reminders.map((r, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <CalendarCheck className="size-3 text-accent shrink-0" />
+                      <span className="tabular-nums">{resolveReminderDate(r.offsetDays)}</span>
+                      <span>· {labelForOffset(r.offsetDays)}</span>
+                      {!r.enabled && <span className="text-warning">(מושהה)</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </fieldset>
 
           {error && (

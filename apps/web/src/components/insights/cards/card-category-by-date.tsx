@@ -13,40 +13,34 @@
 
 import Link from 'next/link';
 import { formatIls } from '@fba/shared';
-import { Wallet, ShoppingBag, ChevronLeft } from 'lucide-react';
+import { Wallet, ShoppingBag, ChevronLeft, History } from 'lucide-react';
 import { InsightCard } from '@/components/insights/insight-card';
-import type { CategoryByDateBucket } from '@/app/(app)/insights/queries';
+import type { CategoryByDateResult } from '@/app/(app)/insights/queries';
 import { INSIGHT_EXPLANATIONS } from '@/app/(app)/insights/explanations';
 
-const FALLBACK_COLOR = 'hsl(215 65% 35%)';
+const FALLBACK_COLOR = 'hsl(var(--chart-1))';
 
 interface Props {
   /** 'charge' = bank-cycle view; 'txn' = calendar-month buying view. */
   basis: 'charge' | 'txn';
-  /** Hebrew sub-header (e.g. "אפריל 2026" or "מאי 2026 (מחזור)"). */
-  subtitle: string;
-  buckets: CategoryByDateBucket[];
-  /**
-   * YYYY-MM string used to build calendar-month date filters when drilling.
-   * Optional so older callers without month context still render — they just
-   * get a category-only drill (no date range).
-   */
-  monthYM?: string;
+  /** Resolved query result — includes the month we actually rendered (which
+   *  may differ from the requested month if we fell back to the most recent
+   *  month with data). */
+  result: CategoryByDateResult;
 }
 
 /** First/last day of a YYYY-MM string, in YYYY-MM-DD format. */
-function monthRange(ym?: string): { from: string; to: string } | null {
-  if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return null;
+function monthRange(ym: string): { from: string; to: string } | null {
+  if (!/^\d{4}-\d{2}$/.test(ym)) return null;
   const [yStr, mStr] = ym.split('-');
   const y = Number(yStr);
   const m = Number(mStr);
-  // last day of month: day 0 of next month
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const mm = String(m).padStart(2, '0');
   return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, '0')}` };
 }
 
-export function CardCategoryByDate({ basis, subtitle, buckets, monthYM }: Props) {
+export function CardCategoryByDate({ basis, result }: Props) {
+  const { resolvedMonth, requestedMonth, fellBack, buckets } = result;
   const total = buckets.reduce((s, b) => s + b.totalIls, 0);
   const top = buckets.slice(0, 8);
   const restSum = buckets.slice(8).reduce((s, b) => s + b.totalIls, 0);
@@ -60,29 +54,40 @@ export function CardCategoryByDate({ basis, subtitle, buckets, monthYM }: Props)
           title: 'הוצאות לפי קטגוריה — מועד חיוב',
           icon: <Wallet className="size-4 shrink-0" aria-hidden />,
           info: INSIGHT_EXPLANATIONS['category-by-charge-date'],
+          subtitlePrefix: 'מחזור',
         }
       : {
           id: 'category-by-txn-date',
           title: 'הוצאות לפי קטגוריה — מועד עסקה',
           icon: <ShoppingBag className="size-4 shrink-0" aria-hidden />,
           info: INSIGHT_EXPLANATIONS['category-by-txn-date'],
+          subtitlePrefix: 'קלנדרי',
         };
 
   return (
     <InsightCard
       id={meta.id}
       title={meta.title}
-      subtitle={subtitle}
+      subtitle={`${meta.subtitlePrefix} ${resolvedMonth}`}
       icon={meta.icon}
       tone="accent"
       info={meta.info}
     >
       {buckets.length === 0 ? (
-        <p className="py-6 text-center text-xs text-muted-foreground">
-          אין הוצאות מקוטלגות בטווח הזה
-        </p>
+        <div className="py-6 text-center">
+          <p className="text-xs text-muted-foreground">אין הוצאות מקוטלגות לחודש {requestedMonth}</p>
+          <p className="mt-1 text-2xs text-muted-foreground/70 max-w-[280px] mx-auto leading-relaxed">
+            הכרטיס מציג את המחזור הפעיל. אם עוד לא ייבאת נתונים החודש, הקלף ישאר ריק עד היבוא הראשון.
+          </p>
+        </div>
       ) : (
         <div className="flex h-full flex-col">
+          {fellBack && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-md bg-warning-soft px-2 py-1 text-2xs text-warning">
+              <History className="size-3 shrink-0" aria-hidden />
+              <span>אין נתונים ל-{requestedMonth} — מציג את {resolvedMonth} (החודש האחרון עם הוצאות)</span>
+            </div>
+          )}
           <div className="mb-2 flex items-baseline gap-2">
             <span className="text-lg font-semibold tabular-nums">{formatIls(total, { decimals: false })}</span>
             <span className="text-2xs text-muted-foreground">סך {buckets.length} קטגוריות</span>
@@ -92,7 +97,7 @@ export function CardCategoryByDate({ basis, subtitle, buckets, monthYM }: Props)
             {top.map((b) => {
               const pct = (b.totalIls / max) * 100;
               const color = b.color ?? FALLBACK_COLOR;
-              const range = monthRange(monthYM);
+              const range = monthRange(resolvedMonth);
               const params = new URLSearchParams({
                 categoryId: b.categoryId,
                 sign: 'expense',

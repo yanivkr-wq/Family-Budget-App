@@ -372,7 +372,7 @@ export function RuleModal({ transactionId, topCategories, subCategories, onClose
                       nlResult.confidence >= 0.8
                         ? 'bg-success/20 text-success'
                         : nlResult.confidence >= 0.5
-                        ? 'bg-amber-100 text-amber-700'
+                        ? 'bg-warning-soft text-warning'
                         : 'bg-destructive/10 text-destructive',
                     )}
                   >
@@ -415,7 +415,7 @@ export function RuleModal({ transactionId, topCategories, subCategories, onClose
                 {/* Follow-up questions */}
                 {nlResult.followUpQuestions.length > 0 && (
                   <div className="space-y-2 border-t pt-2">
-                    <p className="text-xs font-medium text-amber-700">
+                    <p className="text-xs font-medium text-warning">
                       <AlertCircle className="me-1 inline size-3.5" />
                       יש לי שאלות משלימות:
                     </p>
@@ -433,7 +433,7 @@ export function RuleModal({ transactionId, topCategories, subCategories, onClose
                     <button
                       onClick={parseNl}
                       disabled={!nlAnswer.trim() || nlParsing}
-                      className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-xs font-medium text-white disabled:opacity-40 hover:bg-amber-600"
+                      className="inline-flex items-center gap-1 rounded-full bg-warning px-2.5 py-1 text-xs font-medium text-warning-foreground disabled:opacity-40 hover:bg-warning/90"
                     >
                       {nlParsing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
                       עדכן

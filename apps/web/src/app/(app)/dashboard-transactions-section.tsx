@@ -196,7 +196,7 @@ export function DashboardTransactionsSection({
                             {/* ② Category colour dot */}
                             <span
                               className="size-2 rounded-full shrink-0"
-                              style={{ background: tx.categoryColor ?? '#94a3b8' }}
+                              style={{ background: tx.categoryColor ?? 'hsl(var(--muted-foreground))' }}
                             />
 
                             {/* ③ Merchant + category name — inline on one line */}
@@ -211,7 +211,7 @@ export function DashboardTransactionsSection({
 
                             {/* ④ Pending badge */}
                             {isPending && (
-                              <span className="flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 shrink-0 dark:bg-amber-900/30 dark:text-amber-400">
+                              <span className="flex items-center gap-0.5 rounded-full bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning shrink-0">
                                 <Clock className="size-2.5" />
                                 ממתין
                               </span>

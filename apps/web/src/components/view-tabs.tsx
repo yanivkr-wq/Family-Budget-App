@@ -33,11 +33,15 @@ interface ViewOption {
   helpText: string;
   /** Tailwind classes applied when this tab is the ACTIVE one. The colors
    *  here are intentionally subtle — they're a context anchor, not a theme. */
-  activeClass: string;
+  /** Inline style for the active state — uses chart-N CSS vars (brand book
+   *  §1: chart palette = categorical, non-semantic). Each view tab gets a
+   *  distinct chart color so the user can tell views apart at a glance
+   *  without overloading the 6 semantic tones. */
+  activeStyle: React.CSSProperties;
   /** A 2px colored bar shown under the page header for the active view.
    *  Same color family as the active tab so the two cues reinforce each
    *  other. Tailwind bg- only. */
-  stripeClass: string;
+  stripeStyle: React.CSSProperties;
 }
 
 // Order: combined first (the default "everything together" view), then
@@ -50,27 +54,27 @@ export const VIEW_OPTIONS: ViewOption[] = [
     label:    'משולב',
     icon:     Users,
     helpText: 'הכל ביחד, ללא ספירה כפולה של העברות',
-    // Calm violet — distinct from blue (personal) and slate (business),
-    // doesn't compete with the app's semantic colors. Cooler / quieter
-    // than the previous rose; reads as a neutral "everything together".
-    activeClass: 'bg-violet-200 text-violet-900 dark:bg-violet-900/60 dark:text-violet-100',
-    stripeClass: 'bg-violet-400 dark:bg-violet-500',
+    // chart-5 = deep purple. Categorical anchor for "everything together".
+    activeStyle: { backgroundColor: 'hsl(var(--chart-5) / 0.22)', color: 'hsl(var(--chart-5))' },
+    stripeStyle: { backgroundColor: 'hsl(var(--chart-5))' },
   },
   {
     value:    'personal',
     label:    'אישי',
     icon:     UserIcon,
     helpText: 'חשבונות פרטיים בלבד',
-    activeClass: 'bg-blue-200 text-blue-900 dark:bg-blue-900/60 dark:text-blue-100',
-    stripeClass: 'bg-blue-400 dark:bg-blue-600',
+    // chart-7 = sky blue. Distinct from primary (deeper navy).
+    activeStyle: { backgroundColor: 'hsl(var(--chart-7) / 0.22)', color: 'hsl(var(--chart-7))' },
+    stripeStyle: { backgroundColor: 'hsl(var(--chart-7))' },
   },
   {
     value:    'business',
     label:    'עסקי',
     icon:     Briefcase,
     helpText: 'חשבונות עסקיים בלבד',
-    activeClass: 'bg-slate-300 text-slate-900 dark:bg-slate-600 dark:text-slate-100',
-    stripeClass: 'bg-slate-500 dark:bg-slate-400',
+    // chart-2 = teal — matches the "accent" tone family.
+    activeStyle: { backgroundColor: 'hsl(var(--chart-2) / 0.22)', color: 'hsl(var(--chart-2))' },
+    stripeStyle: { backgroundColor: 'hsl(var(--chart-2))' },
   },
   {
     // Household view = comprehensive validation lens. UNLIKE combined, it
@@ -82,10 +86,9 @@ export const VIEW_OPTIONS: ViewOption[] = [
     label:    'משק בית',
     icon:     Home,
     helpText: 'תזרים מלא של משק הבית כולל פרויקטים — לאימות תקציב כולל',
-    // Emerald — communicates "comprehensive / healthy overview", distinct
-    // from the other three colors.
-    activeClass: 'bg-emerald-200 text-emerald-900 dark:bg-emerald-900/60 dark:text-emerald-100',
-    stripeClass: 'bg-emerald-500 dark:bg-emerald-600',
+    // chart-4 = forest green. "Comprehensive / healthy overview".
+    activeStyle: { backgroundColor: 'hsl(var(--chart-4) / 0.22)', color: 'hsl(var(--chart-4))' },
+    stripeStyle: { backgroundColor: 'hsl(var(--chart-4))' },
   },
 ];
 
@@ -117,7 +120,7 @@ export function ViewTabs({
     <div
       role="tablist"
       aria-label="תצוגת חשבונות"
-      className="inline-flex items-center rounded-md border bg-card p-0.5 shadow-sm"
+      className="inline-flex items-center rounded-full border bg-card p-0.5 shadow-sm"
     >
       {VIEW_OPTIONS.map((opt) => {
         const isActive = current === opt.value;
@@ -130,9 +133,10 @@ export function ViewTabs({
             role="tab"
             aria-selected={isActive}
             title={opt.helpText}
+            style={isActive ? opt.activeStyle : undefined}
             className={cn(
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-              isActive ? opt.activeClass : 'text-muted-foreground hover:text-foreground',
+              'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+              !isActive && 'text-muted-foreground hover:text-foreground',
             )}
           >
             <Icon className="size-3.5" />
@@ -154,6 +158,7 @@ export function ViewStripe({ view }: { view: View }) {
   return (
     <div
       aria-hidden="true"
+      style={opt.stripeStyle}
       className={cn(
         // Full-bleed: cancel the layout's px-4 / md:px-6 / lg:px-8.
         '-mx-4 md:-mx-6 lg:-mx-8',
@@ -162,7 +167,6 @@ export function ViewStripe({ view }: { view: View }) {
         '-mt-5 md:-mt-8',
         // Visible: 4px tall.
         'h-1 w-full',
-        opt.stripeClass,
       )}
     />
   );

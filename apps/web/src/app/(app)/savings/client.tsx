@@ -99,9 +99,9 @@ function statusLabel(status: GoalRow['status']): string {
 
 function StatusIcon({ status }: { status: GoalRow['status'] }) {
   if (status === 'completed')
-    return <CheckCircle2 className="size-4 text-emerald-500" />;
+    return <CheckCircle2 className="size-4 text-success" />;
   if (status === 'paused')
-    return <PauseCircle className="size-4 text-amber-500" />;
+    return <PauseCircle className="size-4 text-warning" />;
   return <CircleDollarSign className="size-4 text-primary" />;
 }
 
@@ -441,19 +441,19 @@ function GoalCard({ goal, onEdit, onDelete, onUpdateBalance }: GoalCardProps) {
     goal.targetAmountIls,
     goal.monthlyContributionIls,
   );
-  const accentColor = goal.color ?? '#10b981';
+  const accentColor = goal.color ?? 'hsl(var(--success))';
   const isCompleted = goal.status === 'completed' || pct >= 100;
 
   return (
     <div
       className={cn(
-        'rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md',
+        'rounded-2xl border bg-card shadow-sm transition-shadow hover:shadow-md',
         goal.status === 'paused' && 'opacity-70',
       )}
     >
       {/* top color bar */}
       <div
-        className="h-1 rounded-t-xl"
+        className="h-1 rounded-t-2xl"
         style={{ backgroundColor: accentColor }}
       />
 
@@ -479,9 +479,9 @@ function GoalCard({ goal, onEdit, onDelete, onUpdateBalance }: GoalCardProps) {
               className={cn(
                 'rounded-full px-2 py-0.5 text-2xs font-medium',
                 goal.status === 'completed'
-                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                  ? 'bg-success-soft text-success'
                   : goal.status === 'paused'
-                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                    ? 'bg-warning-soft text-warning'
                     : 'bg-primary-soft text-primary',
               )}
             >
@@ -538,7 +538,7 @@ function GoalCard({ goal, onEdit, onDelete, onUpdateBalance }: GoalCardProps) {
               </span>
             )}
             {isCompleted && eta === 0 && (
-              <span className="flex items-center gap-1 text-emerald-600">
+              <span className="flex items-center gap-1 text-success">
                 <CheckCircle2 className="size-3" />
                 יעד הושג!
               </span>
@@ -645,7 +645,7 @@ export function SavingsClient({ goals, monthly }: SavingsClientProps) {
                 className={cn(
                   'text-lg font-bold tabular-nums',
                   savingsRate !== null && savingsRate >= 100
-                    ? 'text-emerald-600'
+                    ? 'text-success'
                     : 'text-primary',
                 )}
               >

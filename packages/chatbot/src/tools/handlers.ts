@@ -15,7 +15,14 @@ import {
   getAnomaliesArgs,
   findSubscriptionCandidatesArgs,
   searchMerchantsArgs,
+  getWidgetSpecArgs,
 } from './schemas';
+import {
+  getWidgetSpec as getWidgetSpecData,
+  listWidgets,
+  PAGE_IDS,
+  type PageId,
+} from '@fba/shared';
 
 // All handlers receive a household-scoped context. The agent layer enforces this —
 // no handler accepts a raw householdId from the LLM; it's bound via closure.
@@ -457,6 +464,61 @@ export async function searchMerchants(ctx: ToolContext, rawArgs: unknown) {
   };
 }
 
+/**
+ * Returns authoritative metadata about any visible element on any page in
+ * the app — the same contract the code enforces. This is read-only static
+ * data (no DB lookup), so we ignore `ctx`. The chatbot calls this when the
+ * user asks "how does widget X work" / "does Y include CC details" / "what
+ * filters does Z apply" / "why is this number what it is".
+ *
+ * Three modes:
+ *   - no args                → list every widget across every page
+ *   - { page_id }            → list widgets on one page
+ *   - { widget_id }          → full structured spec for one widget
+ *
+ * If both args are provided, widget_id wins (the bot probably already knows
+ * which one it wants).
+ */
+export async function getWidgetSpec(_ctx: ToolContext, rawArgs: unknown) {
+  const args = getWidgetSpecArgs.parse(rawArgs);
+  if (args.widget_id) {
+    const spec = getWidgetSpecData(args.widget_id);
+    if (!spec) {
+      return {
+        mode: 'not_found' as const,
+        note: `No widget with id "${args.widget_id}". Call without widget_id to list available ids${args.page_id ? ` on ${args.page_id}` : ''}.`,
+      };
+    }
+    return { mode: 'spec' as const, spec };
+  }
+
+  if (args.page_id) {
+    if (!(PAGE_IDS as readonly string[]).includes(args.page_id)) {
+      return {
+        mode: 'invalid_page' as const,
+        note: `Unknown page_id "${args.page_id}". Known pages: ${PAGE_IDS.join(', ')}.`,
+      };
+    }
+    return {
+      mode: 'list' as const,
+      pageId: args.page_id,
+      note: 'Call again with a specific widget_id to get that widget\'s full spec.',
+      widgets: listWidgets({ pageId: args.page_id as PageId }),
+    };
+  }
+
+  return {
+    mode: 'list' as const,
+    note: 'Cross-page listing. Pass page_id (e.g. "/" or "/insights") to filter, or widget_id to fetch one widget\'s full spec.',
+    pages: PAGE_IDS,
+    widgets: listWidgets(),
+  };
+}
+
+/** @deprecated Use `getWidgetSpec`. Kept so the old tool name keeps working
+ *  if any cached system prompt still uses it. */
+export const getInsightWidgetSpec = getWidgetSpec;
+
 export const TOOL_HANDLERS: Record<
   string,
   (ctx: ToolContext, args: unknown) => Promise<unknown>
@@ -470,6 +532,9 @@ export const TOOL_HANDLERS: Record<
   get_predicted_balance: getPredictedBalance,
   find_subscription_candidates: findSubscriptionCandidates,
   search_merchants: searchMerchants,
+  get_widget_spec: getWidgetSpec,
+  // Legacy alias for the old name in case any cached prompt/session refers to it.
+  get_insight_widget_spec: getWidgetSpec,
 };
 
 // Re-export so callers can import { addMonths } via @fba/chatbot/tools.

@@ -4,10 +4,18 @@
  * Sections (vertical, RTL):
  *   1. Data-quality strip (always-on banner)
  *   2. Page header + time-window selector
- *   3. Risk insights (top 3 only — informally enforced by quiet thresholds)
- *   4. Trends (chart-based with BI drill-stack)
- *   5. Patterns
- *   6. Data Integrity (the new 5-card section addressing failure mode #1)
+ *   3. Section tabs (filter: all | urgent | trends | patterns | tracking | integrity)
+ *   4. (when tab=all) Hero KPI + narrative summary
+ *   5. Risk insights ("דחוף")
+ *   6. Trends ("מגמות")
+ *   7. Patterns ("דפוסים")
+ *   8. Tracking ("מעקב")
+ *   9. Data Integrity ("אמינות הנתונים")
+ *
+ * Layout features:
+ *   • SectionTabs (top) — URL-driven, filters to a single section.
+ *   • SectionRail (right, lg+) — sticky nav, jump-to anchors when tab=all.
+ *   • InsightSection (collapsible) — per-section toggle, localStorage-persisted.
  *
  * Phase B will add: drill-out routes to /transactions, the back-pill UX.
  * Phase F will add: drag/drop layout customization.
@@ -17,7 +25,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
-import { Sparkles, AlertTriangle, LineChart, Boxes, ShieldCheck, Briefcase } from 'lucide-react';
+import { Sparkles, Briefcase } from 'lucide-react';
 import { he } from '@fba/shared';
 
 import { TimeWindowSelector } from '@/components/insights/time-window-selector';
@@ -25,6 +33,9 @@ import { DataQualityStrip } from '@/components/insights/data-quality-strip';
 import { InsightSection } from '@/components/insights/insight-section';
 import { NarrativeSummary } from '@/components/insights/narrative-summary';
 import { HeroKpiStrip } from '@/components/insights/hero-kpi-strip';
+import { SectionTabs } from '@/components/insights/section-tabs';
+import { SectionRail } from '@/components/insights/section-rail';
+import { SECTIONS, SECTION_ALL, readActiveSection, type SectionId } from './sections';
 
 import { CardUnusualTransaction } from '@/components/insights/cards/card-unusual-transaction';
 import { CardRecurringDrift } from '@/components/insights/cards/card-recurring-drift';
@@ -88,9 +99,15 @@ export default async function InsightsPage(props: {
   const window = readWindow(sp);
   const wLabel = windowLabelHe(window);
 
-  // Phase 8 cards always operate on the CURRENT active billing month — they
-  // intentionally don't follow the time-window selector because they're
-  // about a SPECIFIC cycle (or calendar month) snapshot, not a window.
+  // SINGLE SOURCE OF TRUTH for "which month is now" on this page.
+  //
+  // We resolve the anchor ONCE here and hand the same value to every query
+  // that anchors on "now" (trailing trend windows, lapsed-by-today logic,
+  // category-by-X snapshots, etc.). Queries are forbidden from calling
+  // currentBillingMonth() / activeBillingMonth() internally — see the
+  // contract note at the top of queries.ts. This prevents the silent drift
+  // where one card was reading currentBillingMonth (calendar) and another
+  // was reading activeBillingMonth (cutoff-aware) and they disagreed.
   const activeMonth = activeBillingMonth(10);
   // Calendar month for the txn-date view = same YYYY-MM as the current
   // billing month (close enough; later we can decouple if needed).
@@ -125,30 +142,64 @@ export default async function InsightsPage(props: {
     dataQuality,
     kpis,
   ] = await Promise.all([
-    getUnusualTransactions(householdId, window),
+    getUnusualTransactions(householdId, window, activeMonth),
     getRecurringDrift(householdId, window),
     getPhantomSubscriptions(householdId, window),
     getExpiringSubscriptions(householdId),
-    getLapsedRecurring(householdId),
-    getCategoryTrend(householdId, []),
-    getCategoryMomSpike(householdId),
-    getFixedVsVariable(householdId),
-    getIncomeVsExpenses(householdId),
-    getNetCashFlow(householdId),
+    getLapsedRecurring(householdId, activeMonth),
+    getCategoryTrend(householdId, [], activeMonth),
+    getCategoryMomSpike(householdId, activeMonth),
+    getFixedVsVariable(householdId, activeMonth),
+    getIncomeVsExpenses(householdId, activeMonth),
+    getNetCashFlow(householdId, activeMonth),
     getRefundsAndCredits(householdId, window),
     getForeignCurrencyExposure(householdId, window),
-    getProjectBurnRate(householdId),
+    getProjectBurnRate(householdId, activeMonth),
     getUntaggedTransactions(householdId, window),
     getLowConfidenceCategorizations(householdId, window),
-    getSuspiciousInstallments(householdId),
+    getSuspiciousInstallments(householdId, activeMonth),
     getMisTaggedTransferCandidates(householdId),
     getBadRecurringPatterns(householdId),
     getCcSettlementMismatches(householdId),
     getCategoryByChargeDate(householdId, activeMonth),
     getCategoryByTxnDate(householdId, calMonth),
-    getDataQualitySummary(householdId, window),
+    getDataQualitySummary(householdId, window, activeMonth),
     getDashboardKpis(householdId, window),
   ]);
+
+  // ── Active section (from ?section= URL param) ────────────────────
+  const activeSection = readActiveSection(sp.section);
+  const showAll = activeSection === SECTION_ALL;
+  // When a single section is active, sections shouldn't collapse — there's
+  // nothing else on screen, hiding the only content would be confusing.
+  const forceOpen = !showAll;
+  const isVisible = (id: SectionId) => showAll || activeSection === id;
+
+  // Counts per section — used to badge tab pills, rail pills, and section
+  // headers consistently.
+  //
+  // RULE: "count" = number of **actionable findings**, not data points.
+  // Reference charts (income-vs-expenses, net-cash-flow buckets, fixed-vs-
+  // variable, category-by-date breakdowns, foreign-currency exposure) are
+  // EXCLUDED — their card always renders something and counting their data
+  // rows inflated the trends badge to 30+ even when nothing required atten-
+  // tion. The user reads the badge as "how much should I worry?", and that
+  // only makes sense for findings, not chart bins.
+  //
+  // Data-integrity binary cards (untagged, lowConfidence) collapse to 0/1.
+  const counts: Record<SectionId, number> = {
+    urgent: outliers.length + drifts.length + lapsed.length,
+    trends: momSpikes.length, // line-chart / breakdown cards aren't "findings"
+    patterns: phantoms.length + expiringSubs.length + refunds.rows.length,
+    tracking: projectBurn.length,
+    integrity:
+      (untagged.count > 0 ? 1 : 0) +
+      (lowConf.count > 0 ? 1 : 0) +
+      suspIns.length +
+      transferPairs.length +
+      badPatterns.length +
+      ccMismatches.length,
+  };
 
   return (
     <div className="space-y-6" dir="rtl">
@@ -178,116 +229,137 @@ export default async function InsightsPage(props: {
         <TimeWindowSelector />
       </header>
 
-      {/* ─── Hero KPI strip — top-of-page summary tiles ────────────── */}
-      <HeroKpiStrip kpis={kpis} />
+      {/* ─── Section tabs (top filter) ──────────────────────────────── */}
+      <SectionTabs counts={counts} />
 
-      {/* ─── Storytelling / narrative summary (deterministic Phase A) ── */}
-      <NarrativeSummary
-        windowLabel={wLabel}
-        outliers={outliers}
-        drifts={drifts}
-        phantoms={phantoms}
-        lapsed={lapsed}
-        momSpikes={momSpikes}
-        income={incomeVsExp}
-        untagged={untagged}
-      />
+      {/* ─── Two-column layout: rail (lg+) + main content ───────────── */}
+      <div className="flex flex-row-reverse items-start gap-6">
+        {/* Right-side rail — only when showing all sections (no point on
+            single-section view). Hidden under lg via the component. */}
+        {showAll && <SectionRail counts={counts} />}
 
-      {/* ─── Risk insights ──────────────────────────────────────────── */}
-      <InsightSection
-        title="דחוף"
-        caption="התראות שדורשות תשומת לב"
-        icon={AlertTriangle}
-        tone="destructive"
-      >
-        <CardUnusualTransaction windowLabel={wLabel} findings={outliers} />
-        <CardRecurringDrift windowLabel={wLabel} findings={drifts} />
-        <CardRecurringLapsed windowLabel={wLabel} findings={lapsed} />
-      </InsightSection>
+        <main className="min-w-0 flex-1 space-y-6">
+          {/* Hero KPI + narrative — only shown in the "all" overview. On
+              a single-section view they'd just push the actual cards down. */}
+          {showAll && (
+            <>
+              <HeroKpiStrip kpis={kpis} />
+              <NarrativeSummary
+                windowLabel={wLabel}
+                activeMonth={activeMonth}
+                outliers={outliers}
+                drifts={drifts}
+                phantoms={phantoms}
+                lapsed={lapsed}
+                momSpikes={momSpikes}
+                income={incomeVsExp}
+                untagged={untagged}
+              />
+            </>
+          )}
 
-      {/* ─── Trends ─────────────────────────────────────────────────── */}
-      <InsightSection
-        title="מגמות"
-        caption="לאן הכסף נע לאורך זמן"
-        icon={LineChart}
-        tone="accent"
-      >
-        <CardIncomeVsExpenses windowLabel={wLabel} buckets={incomeVsExp} />
-        <CardNetCashFlow windowLabel={wLabel} buckets={netCashFlow} />
-        <CardCategoryTrend windowLabel={wLabel} initial={catTrendRoot} />
-        <CardCategoryMomSpike windowLabel={wLabel} findings={momSpikes} />
-        <CardFixedVsVariable windowLabel={wLabel} buckets={fixedVar} />
-        <CardCategoryByDate basis="charge" subtitle={`מחזור ${activeMonth}`} buckets={catByCharge} monthYM={activeMonth} />
-        <CardCategoryByDate basis="txn" subtitle={`קלנדרי ${calMonth}`} buckets={catByTxn} monthYM={calMonth} />
-      </InsightSection>
+          {/* Render sections in the order defined by SECTIONS, but only the
+              visible ones. Each section's defaultOpen comes from the
+              centralized smart defaults in sections.ts. */}
+          {SECTIONS.map((s) => {
+            if (!isVisible(s.id)) return null;
+            // Note: icon is NOT passed as a prop. InsightSection looks it up
+            // from the central SECTIONS registry by id. Lucide icons are
+            // forwardRef functions and can't cross the SC→CC boundary.
+            const sectionDefaults = {
+              id: s.id,
+              title: s.title,
+              caption: s.caption,
+              tone: s.tone,
+              defaultOpen: s.defaultOpen,
+              count: counts[s.id],
+              forceOpen,
+            } as const;
 
-      {/* ─── Patterns ───────────────────────────────────────────────── */}
-      <InsightSection
-        title="דפוסים"
-        caption="התנהגויות קבועות שכדאי להכיר"
-        icon={Boxes}
-        tone="primary"
-      >
-        <CardPhantomSubscription windowLabel={wLabel} findings={phantoms} />
-        <CardExpiringSubscriptions windowLabel={wLabel} findings={expiringSubs} />
-        <CardRefundsAndCredits windowLabel={wLabel} rows={refunds.rows} totalIls={refunds.totalIls} />
-        <CardForeignCurrency windowLabel={wLabel} buckets={foreignCurrency} />
-      </InsightSection>
+            if (s.id === 'urgent') {
+              return (
+                <InsightSection key={s.id} {...sectionDefaults}>
+                  <CardUnusualTransaction windowLabel={wLabel} findings={outliers} />
+                  <CardRecurringDrift windowLabel={wLabel} findings={drifts} />
+                  <CardRecurringLapsed windowLabel={wLabel} findings={lapsed} />
+                </InsightSection>
+              );
+            }
+            if (s.id === 'trends') {
+              return (
+                <InsightSection key={s.id} {...sectionDefaults}>
+                  <CardIncomeVsExpenses windowLabel={wLabel} buckets={incomeVsExp} />
+                  <CardNetCashFlow windowLabel={wLabel} buckets={netCashFlow} />
+                  <CardCategoryTrend windowLabel={wLabel} initial={catTrendRoot} />
+                  <CardCategoryMomSpike windowLabel={wLabel} findings={momSpikes} />
+                  <CardFixedVsVariable windowLabel={wLabel} buckets={fixedVar} />
+                  <CardCategoryByDate basis="charge" result={catByCharge} />
+                  <CardCategoryByDate basis="txn" result={catByTxn} />
+                </InsightSection>
+              );
+            }
+            if (s.id === 'patterns') {
+              return (
+                <InsightSection key={s.id} {...sectionDefaults}>
+                  <CardPhantomSubscription windowLabel={wLabel} findings={phantoms} />
+                  <CardExpiringSubscriptions windowLabel={wLabel} findings={expiringSubs} />
+                  <CardRefundsAndCredits windowLabel={wLabel} rows={refunds.rows} totalIls={refunds.totalIls} />
+                  <CardForeignCurrency windowLabel={wLabel} buckets={foreignCurrency} />
+                </InsightSection>
+              );
+            }
+            if (s.id === 'tracking') {
+              return (
+                <InsightSection key={s.id} {...sectionDefaults}>
+                  <CardProjectBurnRate windowLabel={wLabel} findings={projectBurn} />
+                </InsightSection>
+              );
+            }
+            // 'integrity' — preserve the legacy #data-integrity anchor for
+            // the data-quality strip's "השלם בדיקה" link.
+            return (
+              <div key={s.id} id="data-integrity" className="scroll-mt-20">
+                <InsightSection {...sectionDefaults}>
+                  <CardUntaggedTransactions windowLabel={wLabel} finding={untagged} />
+                  <CardLowConfidenceCategorizations windowLabel={wLabel} finding={lowConf} />
+                  <CardSuspiciousInstallments windowLabel={wLabel} findings={suspIns} />
+                  <CardMisTaggedTransfers windowLabel={wLabel} pairs={transferPairs} />
+                  <CardBadRecurringPatterns windowLabel={wLabel} findings={badPatterns} />
+                  <CardCcSettlementMismatch windowLabel={wLabel} findings={ccMismatches} />
+                </InsightSection>
+              </div>
+            );
+          })}
 
-      {/* ─── Tracking (project + future P1 cards land here) ─────────── */}
-      <InsightSection
-        title="מעקב"
-        caption="פרויקטים ותוכניות שדורשות מעקב מתמשך"
-        icon={Briefcase}
-        tone="success"
-      >
-        <CardProjectBurnRate windowLabel={wLabel} findings={projectBurn} />
-      </InsightSection>
-
-      {/* ─── Data Integrity (anchor target for the data-quality strip) ── */}
-      <section id="data-integrity" className="scroll-mt-20">
-        <InsightSection
-          title="אמינות הנתונים"
-          caption="עזרה למצוא בעיות בנתונים שלך"
-          icon={ShieldCheck}
-          tone="warning"
-        >
-          <CardUntaggedTransactions windowLabel={wLabel} finding={untagged} />
-          <CardLowConfidenceCategorizations windowLabel={wLabel} finding={lowConf} />
-          <CardSuspiciousInstallments windowLabel={wLabel} findings={suspIns} />
-          <CardMisTaggedTransfers windowLabel={wLabel} pairs={transferPairs} />
-          <CardBadRecurringPatterns windowLabel={wLabel} findings={badPatterns} />
-          <CardCcSettlementMismatch windowLabel={wLabel} findings={ccMismatches} />
-        </InsightSection>
-      </section>
-
-      {/* ─── Phase A footer ─────────────────────────────────────────── */}
-      <footer className="border-t pt-4 text-2xs text-muted-foreground">
-        <p>
-          תובנות (פאזה A) ·{' '}
-          {(
-            outliers.length +
-            drifts.length +
-            phantoms.length +
-            lapsed.length +
-            momSpikes.length +
-            incomeVsExp.length +
-            netCashFlow.length +
-            refunds.rows.length +
-            foreignCurrency.length +
-            projectBurn.length +
-            (untagged.count > 0 ? 1 : 0) +
-            (lowConf.count > 0 ? 1 : 0) +
-            suspIns.length +
-            transferPairs.length +
-            badPatterns.length +
-            ccMismatches.length +
-            catByCharge.length +
-            catByTxn.length
-          ).toLocaleString('he-IL')}{' '}
-          ממצאים נמצאו
-        </p>
-      </footer>
+          {/* ─── Phase A footer ─────────────────────────────────────────── */}
+          <footer className="border-t pt-4 text-2xs text-muted-foreground">
+            <p>
+              תובנות (פאזה A) ·{' '}
+              {(
+                outliers.length +
+                drifts.length +
+                phantoms.length +
+                lapsed.length +
+                momSpikes.length +
+                incomeVsExp.length +
+                netCashFlow.length +
+                refunds.rows.length +
+                foreignCurrency.length +
+                projectBurn.length +
+                (untagged.count > 0 ? 1 : 0) +
+                (lowConf.count > 0 ? 1 : 0) +
+                suspIns.length +
+                transferPairs.length +
+                badPatterns.length +
+                ccMismatches.length +
+                catByCharge.buckets.length +
+                catByTxn.buckets.length
+              ).toLocaleString('he-IL')}{' '}
+              ממצאים נמצאו
+            </p>
+          </footer>
+        </main>
+      </div>
     </div>
   );
 }

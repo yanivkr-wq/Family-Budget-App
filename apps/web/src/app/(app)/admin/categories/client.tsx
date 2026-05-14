@@ -135,7 +135,7 @@ function InlineEditForm({
               checked={isSavings}
               onChange={(e) => setIsSavings(e.target.checked)}
             />
-            <PiggyBank className="size-3 text-emerald-600" />
+            <PiggyBank className="size-3 text-success" />
             חיסכון
           </label>
         </>
@@ -237,7 +237,7 @@ function AddCategoryForm({
           </label>
           <label className="flex items-center gap-1.5 text-xs" title="קטגוריה זו מייצגת חיסכון">
             <input type="checkbox" checked={isSavings} onChange={(e) => setIsSavings(e.target.checked)} />
-            <PiggyBank className="size-3 text-emerald-600" />
+            <PiggyBank className="size-3 text-success" />
             חיסכון
           </label>
         </>
@@ -320,7 +320,7 @@ function CategoryRow({
             {cat.nameHe}
             {cat.isIncome && <span className="text-xs text-muted-foreground">(הכנסות)</span>}
             {cat.isSavings && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-2xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-success-soft px-1.5 py-0.5 text-2xs font-medium text-success">
                 <PiggyBank className="size-2.5" /> חיסכון
               </span>
             )}

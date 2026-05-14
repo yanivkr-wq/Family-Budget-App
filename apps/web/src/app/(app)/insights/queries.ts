@@ -19,7 +19,22 @@
  */
 
 import { and, desc, eq, gte, ilike, isNull, lte, sql, inArray, ne, isNotNull } from 'drizzle-orm';
-import { getDb, schema, addMonths, currentBillingMonth, activeBillingMonth, isSettlementLineExpr } from '@fba/db';
+/**
+ * SINGLE-SOURCE-OF-TRUTH CONTRACT (added 2026-05-13 after a real bug):
+ *
+ * Every monthly aggregation in this file accepts the "current month" anchor
+ * as a parameter — typically `anchorMonth: string` (YYYY-MM). The page
+ * (insights/page.tsx) resolves the anchor ONCE via activeBillingMonth(10)
+ * and hands the same value to every query. This guarantees every card on
+ * the page agrees on which billing cycle is "now".
+ *
+ * Do NOT reintroduce `currentBillingMonth()` or `activeBillingMonth()` calls
+ * inside this file — there's an ESLint guard against it (.eslintrc) and a
+ * reason: those helpers diverge (calendar-month vs cutoff-aware billing-
+ * cycle), and historically cards picked whichever was at hand, causing the
+ * narrative and the KPI strip to silently reference different months.
+ */
+import { getDb, schema, addMonths, isSettlementLineExpr } from '@fba/db';
 import type { InsightWindow } from './types';
 
 /**
@@ -46,6 +61,12 @@ function excludeAllProjectTxns() {
 /**
  * Build the date / billing-month constraint for a given window.
  * MTD uses billing_month equality; everything else uses transaction_date range.
+ *
+ * Throws on a malformed window rather than silently falling back. A silent
+ * fallback to "today's calendar month" was the kind of drift this file's
+ * single-source-of-truth contract is meant to prevent — a misconfigured
+ * caller should fail loudly so we notice, not paper over the bug with the
+ * wrong month.
  */
 function windowFragment(w: InsightWindow) {
   if (w.kind === 'mtd' && w.billingMonth) {
@@ -57,8 +78,7 @@ function windowFragment(w: InsightWindow) {
       lte(schema.transactions.transactionDate, w.dateTo),
     );
   }
-  // Fallback: current billing month (should never hit if window is well-formed)
-  return eq(schema.transactions.billingMonth, currentBillingMonth());
+  throw new Error(`insights/windowFragment: malformed InsightWindow ${JSON.stringify(w)} — caller must use readWindow() to construct a well-formed window`);
 }
 
 /** Standard "good rows for spending math" constraints. */
@@ -94,7 +114,11 @@ export interface OutlierFinding {
  * rows and computing in JS — bounded to top 200 transactions × per-merchant
  * trailing stats query in a single aggregation.
  */
-export async function getUnusualTransactions(householdId: string, w: InsightWindow): Promise<OutlierFinding[]> {
+export async function getUnusualTransactions(
+  householdId: string,
+  w: InsightWindow,
+  anchorMonth: string,
+): Promise<OutlierFinding[]> {
   const db = getDb();
   const Z_THRESHOLD = 2.5;
   const HISTORY_MONTHS = 6;
@@ -114,9 +138,12 @@ export async function getUnusualTransactions(householdId: string, w: InsightWind
 
   if (candidates.length === 0) return [];
 
-  // Pull trailing 6-month stats per distinct merchant in candidates
+  // Pull trailing 6-month stats per distinct merchant in candidates.
+  // anchorMonth = "this page's current month" — passed in by the caller so
+  // every card on /insights agrees on which month is "now". See the
+  // single-source-of-truth contract in this file's header.
   const merchants = Array.from(new Set(candidates.map((c) => c.merchant)));
-  const baselineFrom = addMonths(currentBillingMonth(), -HISTORY_MONTHS);
+  const baselineFrom = addMonths(anchorMonth, -HISTORY_MONTHS);
 
   const stats = await db
     .select({
@@ -133,7 +160,6 @@ export async function getUnusualTransactions(householdId: string, w: InsightWind
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         excludeAllProjectTxns(),
         gte(schema.transactions.billingMonth, baselineFrom),
         inArray(schema.transactions.merchantNormalized, merchants),
@@ -206,7 +232,25 @@ export async function getRecurringDrift(householdId: string, _w: InsightWindow):
   const findings: RecurringDriftFinding[] = [];
 
   for (const p of patterns) {
-    // Latest non-deleted, non-projected charge to this merchant
+    const expectedSigned = Number(p.expectedAmountIls);
+    if (expectedSigned === 0) continue;
+    // The recurring_pattern table stores expected_amount_ils SIGNED — negative
+    // for expense patterns, positive for income. We only want to compare a
+    // pattern against transactions of the SAME sign — otherwise an isolated
+    // refund (positive) against an expense pattern (negative) gets compared
+    // as +abs vs -expected and the diffPct comes out as ~-200% on every single
+    // pattern. (That's the bug we're fixing here: previously this loop flagged
+    // 100% of active expense patterns as "drifting" by ~200%.)
+    const expectedSign = expectedSigned > 0 ? 1 : -1;
+
+    // Latest charge of the SAME SIGN to this merchant. We deliberately
+    // DO NOT filter excluded_from_totals here: most recurring expenses are
+    // CC-paid, so the per-charge row is a CC detail (excluded_from_totals=
+    // true — the settlement line carries the totals) and it's that detail
+    // row that has the per-charge amount we need to compare against the
+    // pattern's expected. Filtering it out would drop every CC-based
+    // pattern from this card. We DO add the other spending-math guards
+    // (transfer, project exclusion) that were missing originally.
     const [latest] = await db
       .select({
         amount: schema.transactions.amountIls,
@@ -219,15 +263,22 @@ export async function getRecurringDrift(householdId: string, _w: InsightWindow):
           eq(schema.transactions.merchantNormalized, p.merchantNormalized),
           isNull(schema.transactions.deletedAt),
           eq(schema.transactions.isProjected, false),
+          eq(schema.transactions.isTransfer, false),
+          excludeAllProjectTxns(),
+          expectedSign > 0
+            ? sql`${schema.transactions.amountIls} > 0`
+            : sql`${schema.transactions.amountIls} < 0`,
         ),
       )
       .orderBy(desc(schema.transactions.transactionDate))
       .limit(1);
 
     if (!latest) continue;
-    const expected = Number(p.expectedAmountIls);
+    // Drift is the change in MAGNITUDE of the recurring amount, so compare
+    // absolute values. (Signed math here would be valid too, but abs is
+    // clearer and matches how the card surfaces the number.)
+    const expected = Math.abs(expectedSigned);
     const actual = Math.abs(Number(latest.amount));
-    if (expected === 0) continue;
     const diffPct = ((actual - expected) / expected) * 100;
     const limit = p.tolerancePct + BUFFER_PP;
     if (Math.abs(diffPct) >= limit) {
@@ -446,9 +497,12 @@ export interface LapsedFinding {
  * fired. "Expected by" = the median day-of-month from the pattern's last 6
  * charges (proxy for its usual cadence).
  */
-export async function getLapsedRecurring(householdId: string): Promise<LapsedFinding[]> {
+export async function getLapsedRecurring(
+  householdId: string,
+  anchorMonth: string,
+): Promise<LapsedFinding[]> {
   const db = getDb();
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
   const today = new Date();
   const todayDay = today.getDate();
 
@@ -557,10 +611,11 @@ export interface CategoryTrendBucket {
 export async function getCategoryTrend(
   householdId: string,
   drillPath: string[],
+  anchorMonth: string,
 ): Promise<{ buckets: CategoryTrendBucket[]; months: string[]; effectiveLevel: 'category' | 'sub' | 'merchant' }> {
   const db = getDb();
   const N_MONTHS = 4;
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
   const months: string[] = [];
   for (let i = N_MONTHS - 1; i >= 0; i--) months.push(addMonths(cur, -i));
   const earliest = months[0]!;
@@ -692,12 +747,15 @@ export interface MomSpikeFinding {
  * Flag categories where this month is ≥30% over the trailing median (and the
  * absolute difference is ≥ ₪200, to suppress noise on tiny categories).
  */
-export async function getCategoryMomSpike(householdId: string): Promise<MomSpikeFinding[]> {
+export async function getCategoryMomSpike(
+  householdId: string,
+  anchorMonth: string,
+): Promise<MomSpikeFinding[]> {
   const db = getDb();
   const SPIKE_PCT = 30;
   const MIN_DELTA = 200;
   const TRAILING_MONTHS = 3;
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
   const months = [cur];
   for (let i = 1; i <= TRAILING_MONTHS; i++) months.push(addMonths(cur, -i));
 
@@ -717,7 +775,6 @@ export async function getCategoryMomSpike(householdId: string): Promise<MomSpike
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         excludeAllProjectTxns(),
         inArray(schema.transactions.billingMonth, months),
       ),
@@ -776,10 +833,13 @@ export interface FixedVsVariableMonthlyBucket {
  * Last 6 monthly buckets. "Fixed" = transactions where isRecurring=true OR
  * isInstallment=true. "Variable" = everything else (still spending, no transfers).
  */
-export async function getFixedVsVariable(householdId: string): Promise<FixedVsVariableMonthlyBucket[]> {
+export async function getFixedVsVariable(
+  householdId: string,
+  anchorMonth: string,
+): Promise<FixedVsVariableMonthlyBucket[]> {
   const db = getDb();
   const N = 6;
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
   const months: string[] = [];
   for (let i = N - 1; i >= 0; i--) months.push(addMonths(cur, -i));
   const earliest = months[0]!;
@@ -801,7 +861,6 @@ export async function getFixedVsVariable(householdId: string): Promise<FixedVsVa
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         excludeAllProjectTxns(),
         gte(schema.transactions.billingMonth, earliest),
         lte(schema.transactions.billingMonth, cur),
@@ -854,11 +913,28 @@ export interface IncomeVsExpenseBucket {
  *   • Income   = sum(amount)   WHERE amount > 0 AND category.is_income = TRUE
  *   • Positive amounts in non-income categories are IGNORED — they're refunds
  *     or unmarked transfers, surfaced separately by the dedicated cards.
+ *
+ * ⚠ STRUCTURAL "totals = bank rows only" RULE (added 2026-05-13):
+ * The user's principle is that income/expense TOTALS come from bank-account
+ * rows (settlement lines + bank-direct charges) — never from CC detail rows.
+ * Previously we relied on every CC detail being flagged
+ * `excluded_from_totals=true` at import time, but forex imports sometimes
+ * skipped that flag, causing CC details to double-count on top of the
+ * settlement line that already bundles them (e.g. 9 forex CC rows leaked
+ * ₪2,861 into the 2026-04 expenses total). The fix enforces the rule
+ * structurally with `accounts.type = 'bank'` — no per-row flag required.
+ *
+ * Category / behavior cards (CategoryByDate, ForeignCurrency, etc.) are
+ * unaffected — they correctly pull CC detail rows because their purpose
+ * is to surface per-purchase data, not bank-side totals.
  */
-export async function getIncomeVsExpenses(householdId: string): Promise<IncomeVsExpenseBucket[]> {
+export async function getIncomeVsExpenses(
+  householdId: string,
+  anchorMonth: string,
+): Promise<IncomeVsExpenseBucket[]> {
   const db = getDb();
   const N = 6;
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
   const months: string[] = [];
   for (let i = N - 1; i >= 0; i--) months.push(addMonths(cur, -i));
   const earliest = months[0]!;
@@ -871,14 +947,19 @@ export async function getIncomeVsExpenses(householdId: string): Promise<IncomeVs
     })
     .from(schema.transactions)
     .leftJoin(schema.categories, eq(schema.transactions.categoryId, schema.categories.id))
+    .leftJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
     .where(
       and(
         eq(schema.transactions.householdId, householdId),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
+        // Bank-only structural filter — see ⚠ block above. The legacy
+        // excluded_from_totals filter is kept as a belt-and-suspenders
+        // guard (bank rows that import flagged excluded for some reason
+        // should still respect that flag).
+        eq(schema.accounts.type, 'bank'),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         excludeAllProjectTxns(),
         gte(schema.transactions.billingMonth, earliest),
         lte(schema.transactions.billingMonth, cur),
@@ -1032,9 +1113,12 @@ export interface SuspiciousInstallmentFinding {
   detail: string;
 }
 
-export async function getSuspiciousInstallments(householdId: string): Promise<SuspiciousInstallmentFinding[]> {
+export async function getSuspiciousInstallments(
+  householdId: string,
+  anchorMonth: string,
+): Promise<SuspiciousInstallmentFinding[]> {
   const db = getDb();
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
 
   const plans = await db
     .select()
@@ -1166,7 +1250,6 @@ export async function getMisTaggedTransferCandidates(householdId: string): Promi
         eq(schema.transactions.householdId, householdId),
         eq(schema.transactions.isTransfer, false),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         isNull(schema.transactions.transferPairId),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
@@ -1291,11 +1374,19 @@ export async function getCcSettlementMismatches(householdId: string): Promise<Cc
       else continue; // unknown CC issuer — skip; user can configure pattern manually
     }
 
-    // Per billing month: sum of non-forex details on this CC account
+    // Per billing month: NET sum of non-forex details on this CC account.
+    //
+    // CRITICAL: we use ABS(SUM(amount)), NOT SUM(ABS(amount)). The bank's
+    // single settlement line for the cycle equals the NET of all CC details
+    // — refunds reduce what the bank withdraws. If we sum the absolute
+    // values, every refund double-counts (the refund got "subtracted" from
+    // settlement but "added" to details), producing false gaps on every
+    // cycle that has even one return. With the user's data this previously
+    // showed e.g. ₪355 fake gap on Diners 2026-05 (single ₪177.57 refund).
     const detailRows = await db
       .select({
         billingMonth: schema.transactions.billingMonth,
-        sum: sql<string>`coalesce(sum(abs(${schema.transactions.amountIls}))::numeric, 0)`,
+        sum: sql<string>`coalesce(abs(sum(${schema.transactions.amountIls}))::numeric, 0)`,
         n: sql<string>`count(*)`,
       })
       .from(schema.transactions)
@@ -1469,6 +1560,14 @@ export interface DashboardKpis {
  *     refunds, credits, or unmarked transfers, all surfaced separately by
  *     the Refunds card and the Mis-tagged Transfers card.
  *
+ * ⚠ STRUCTURAL "totals = bank rows only" RULE (added 2026-05-13): Hero KPI
+ * totals come exclusively from bank-account rows — settlement lines and
+ * bank-direct charges. CC detail rows are EXPLICITLY excluded by
+ * `accounts.type = 'bank'`, not just by the flaky `excluded_from_totals=true`
+ * flag. The flag was leaking forex CC charges that double-counted on top of
+ * their settlement line. See the matching rule on getIncomeVsExpenses for
+ * the full rationale.
+ *
  * Strict project exclusion via excludeAllProjectTxns().
  */
 export async function getDashboardKpis(householdId: string, w: InsightWindow): Promise<DashboardKpis> {
@@ -1481,6 +1580,7 @@ export async function getDashboardKpis(householdId: string, w: InsightWindow): P
     isNull(schema.transactions.deletedAt),
     eq(schema.transactions.isProjected, false),
     eq(schema.transactions.isTransfer, false),
+    eq(schema.accounts.type, 'bank'),
     eq(schema.transactions.excludedFromTotals, false),
     excludeAllProjectTxns(),
     windowFragment(w),
@@ -1494,6 +1594,7 @@ export async function getDashboardKpis(householdId: string, w: InsightWindow): P
     })
     .from(schema.transactions)
     .leftJoin(schema.categories, eq(schema.transactions.categoryId, schema.categories.id))
+    .leftJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
     .where(baseConditions);
 
   const income = Number(agg?.income ?? 0);
@@ -1522,7 +1623,10 @@ export async function getDashboardKpis(householdId: string, w: InsightWindow): P
     prevWhere = sql`false`; // shouldn't happen, but be safe
   }
 
-  // Same sign-aware rule for the previous-period delta calc
+  // Same sign-aware rule + same bank-only structural filter as the current-
+  // period query. Otherwise the delta would compare current-period bank-only
+  // numbers against previous-period "bank + leaky-CC" numbers — apples to
+  // oranges, and the delta would always look smaller than reality.
   const [prevAgg] = await db
     .select({
       expenses: sql<string>`coalesce(sum(case when ${schema.transactions.amountIls} < 0 then abs(${schema.transactions.amountIls}) else 0 end), 0)`,
@@ -1530,14 +1634,15 @@ export async function getDashboardKpis(householdId: string, w: InsightWindow): P
     })
     .from(schema.transactions)
     .leftJoin(schema.categories, eq(schema.transactions.categoryId, schema.categories.id))
+    .leftJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
     .where(
       and(
         eq(schema.transactions.householdId, householdId),
         isNull(schema.transactions.deletedAt),
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
+        eq(schema.accounts.type, 'bank'),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         excludeAllProjectTxns(),
         prevWhere,
       ),
@@ -1572,6 +1677,19 @@ export interface CategoryByDateBucket {
   count: number;
 }
 
+/** Result envelope: when the requested month has zero categorized expenses
+ *  we fall back to the most recent month that does. `resolvedMonth` tells the
+ *  caller which month is actually being shown, so the UI subtitle can reflect
+ *  reality instead of silently showing the empty requested month. */
+export interface CategoryByDateResult {
+  resolvedMonth: string;
+  requestedMonth: string;
+  /** True if we fell back to a different month because the requested one had
+   *  no data. Useful for showing a "showing X instead of Y" hint. */
+  fellBack: boolean;
+  buckets: CategoryByDateBucket[];
+}
+
 /**
  * "What hit my bank this billing cycle, by category?" — uses charge_date
  * (or billing_month for accounts that don't track charge_date) so the
@@ -1586,9 +1704,12 @@ export interface CategoryByDateBucket {
  *
  * Strict project exclusion. Settlement-basis filter (excluded_from_totals=false).
  */
-export async function getCategoryByChargeDate(householdId: string, billingMonth: string): Promise<CategoryByDateBucket[]> {
+async function queryCategoryByChargeDate(
+  householdId: string,
+  billingMonth: string,
+  catMap: Map<string, { name: string; color: string | null; isIncome: boolean }>,
+): Promise<CategoryByDateBucket[]> {
   const db = getDb();
-
   const rows = await db
     .select({
       categoryId: schema.transactions.categoryId,
@@ -1609,12 +1730,6 @@ export async function getCategoryByChargeDate(householdId: string, billingMonth:
     )
     .groupBy(schema.transactions.categoryId);
 
-  const cats = await db
-    .select({ id: schema.categories.id, name: schema.categories.nameHe, color: schema.categories.color, isIncome: schema.categories.isIncome })
-    .from(schema.categories)
-    .where(eq(schema.categories.householdId, householdId));
-  const catMap = new Map(cats.map((c) => [c.id, c]));
-
   const buckets: CategoryByDateBucket[] = [];
   for (const r of rows) {
     const total = Number(r.total);
@@ -1631,6 +1746,49 @@ export async function getCategoryByChargeDate(householdId: string, billingMonth:
   }
   buckets.sort((a, b) => b.totalIls - a.totalIls);
   return buckets;
+}
+
+export async function getCategoryByChargeDate(householdId: string, billingMonth: string): Promise<CategoryByDateResult> {
+  const db = getDb();
+
+  const catRows = await db
+    .select({ id: schema.categories.id, name: schema.categories.nameHe, color: schema.categories.color, isIncome: schema.categories.isIncome })
+    .from(schema.categories)
+    .where(eq(schema.categories.householdId, householdId));
+  const catMap = new Map(catRows.map((c) => [c.id, { name: c.name, color: c.color, isIncome: c.isIncome }]));
+
+  // First try the requested month.
+  let buckets = await queryCategoryByChargeDate(householdId, billingMonth, catMap);
+  if (buckets.length > 0) {
+    return { resolvedMonth: billingMonth, requestedMonth: billingMonth, fellBack: false, buckets };
+  }
+
+  // Fallback: pick the most recent billing_month that has any non-project,
+  // non-transfer, settlement-basis expense. Empty current cycle is the common
+  // case right after the cycle rollover (data not imported yet) — without this
+  // fallback the card silently shows nothing and the user can't tell why.
+  const latest = await db
+    .select({ m: sql<string>`max(${schema.transactions.billingMonth})` })
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.householdId, householdId),
+        isNull(schema.transactions.deletedAt),
+        eq(schema.transactions.isProjected, false),
+        eq(schema.transactions.isTransfer, false),
+        eq(schema.transactions.excludedFromTotals, false),
+        excludeAllProjectTxns(),
+        sql`${schema.transactions.amountIls} < 0`,
+        sql`${schema.transactions.billingMonth} < ${billingMonth}`,
+      ),
+    );
+  const fallbackMonth = latest[0]?.m;
+  if (!fallbackMonth) {
+    return { resolvedMonth: billingMonth, requestedMonth: billingMonth, fellBack: false, buckets: [] };
+  }
+
+  buckets = await queryCategoryByChargeDate(householdId, fallbackMonth, catMap);
+  return { resolvedMonth: fallbackMonth, requestedMonth: billingMonth, fellBack: true, buckets };
 }
 
 // ─── Phase 8 — category breakdown by TRANSACTION date (buying behavior) ─────
@@ -1654,11 +1812,13 @@ export async function getCategoryByChargeDate(householdId: string, billingMonth:
  * Result: charge view of April + txn view of April will SHOW DIFFERENT
  * numbers — as the user expects.
  */
-export async function getCategoryByTxnDate(householdId: string, calendarMonth: string): Promise<CategoryByDateBucket[]> {
+async function queryCategoryByTxnDate(
+  householdId: string,
+  calendarMonth: string,
+  catMap: Map<string, { name: string; color: string | null; isIncome: boolean }>,
+): Promise<CategoryByDateBucket[]> {
   const db = getDb();
   const monthStart = `${calendarMonth}-01`;
-  // Last day of the calendar month — handles 28/29/30/31 correctly via
-  // Date(year, month, 0).getDate() (day-0 of next month = last of this).
   const [y, m] = calendarMonth.split('-').map(Number);
   const lastDay = new Date(y!, m!, 0).getDate();
   const monthEnd = `${calendarMonth}-${String(lastDay).padStart(2, '0')}`;
@@ -1678,8 +1838,7 @@ export async function getCategoryByTxnDate(householdId: string, calendarMonth: s
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
         // KEY DIFFERENCE: don't filter on excluded_from_totals — CC details
-        // ARE the truth for buying date. Instead, exclude settlement lines
-        // (the bank-side rows that aggregate CC details into one row).
+        // ARE the truth for buying date. Instead, exclude settlement lines.
         sql`NOT (${isSettlementLineExpr()})`,
         excludeAllProjectTxns(),
         gte(schema.transactions.transactionDate, monthStart),
@@ -1687,12 +1846,6 @@ export async function getCategoryByTxnDate(householdId: string, calendarMonth: s
       ),
     )
     .groupBy(schema.transactions.categoryId);
-
-  const cats = await db
-    .select({ id: schema.categories.id, name: schema.categories.nameHe, color: schema.categories.color, isIncome: schema.categories.isIncome })
-    .from(schema.categories)
-    .where(eq(schema.categories.householdId, householdId));
-  const catMap = new Map(cats.map((c) => [c.id, c]));
 
   const buckets: CategoryByDateBucket[] = [];
   for (const r of rows) {
@@ -1712,6 +1865,51 @@ export async function getCategoryByTxnDate(householdId: string, calendarMonth: s
   return buckets;
 }
 
+export async function getCategoryByTxnDate(householdId: string, calendarMonth: string): Promise<CategoryByDateResult> {
+  const db = getDb();
+
+  const catRows = await db
+    .select({ id: schema.categories.id, name: schema.categories.nameHe, color: schema.categories.color, isIncome: schema.categories.isIncome })
+    .from(schema.categories)
+    .where(eq(schema.categories.householdId, householdId));
+  const catMap = new Map(catRows.map((c) => [c.id, { name: c.name, color: c.color, isIncome: c.isIncome }]));
+
+  // First try the requested month.
+  let buckets = await queryCategoryByTxnDate(householdId, calendarMonth, catMap);
+  if (buckets.length > 0) {
+    return { resolvedMonth: calendarMonth, requestedMonth: calendarMonth, fellBack: false, buckets };
+  }
+
+  // Fallback: find the most recent calendar month with any non-project,
+  // non-settlement-line expense. Uses to_char to extract YYYY-MM from the
+  // transaction_date column. isSettlementLineExpr() references accounts.type,
+  // so we MUST left-join accounts here too.
+  const monthStart = `${calendarMonth}-01`;
+  const latest = await db
+    .select({ m: sql<string>`max(to_char(${schema.transactions.transactionDate}, 'YYYY-MM'))` })
+    .from(schema.transactions)
+    .leftJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
+    .where(
+      and(
+        eq(schema.transactions.householdId, householdId),
+        isNull(schema.transactions.deletedAt),
+        eq(schema.transactions.isProjected, false),
+        eq(schema.transactions.isTransfer, false),
+        sql`NOT (${isSettlementLineExpr()})`,
+        excludeAllProjectTxns(),
+        sql`${schema.transactions.amountIls} < 0`,
+        sql`${schema.transactions.transactionDate} < ${monthStart}`,
+      ),
+    );
+  const fallbackMonth = latest[0]?.m;
+  if (!fallbackMonth) {
+    return { resolvedMonth: calendarMonth, requestedMonth: calendarMonth, fellBack: false, buckets: [] };
+  }
+
+  buckets = await queryCategoryByTxnDate(householdId, fallbackMonth, catMap);
+  return { resolvedMonth: fallbackMonth, requestedMonth: calendarMonth, fellBack: true, buckets };
+}
+
 // ─── Net cash flow per month ────────────────────────────────────────────────
 
 export interface NetCashFlowBucket {
@@ -1723,8 +1921,11 @@ export interface NetCashFlowBucket {
  * Last 6 monthly buckets, signed net (income − expenses). Different from
  * IncomeVsExpenses: this is just the bottom line per month for a quick scan.
  */
-export async function getNetCashFlow(householdId: string): Promise<NetCashFlowBucket[]> {
-  const buckets = await getIncomeVsExpenses(householdId);
+export async function getNetCashFlow(
+  householdId: string,
+  anchorMonth: string,
+): Promise<NetCashFlowBucket[]> {
+  const buckets = await getIncomeVsExpenses(householdId, anchorMonth);
   return buckets.map((b) => ({ month: b.month, netIls: b.netIls }));
 }
 
@@ -1767,7 +1968,6 @@ export async function getRefundsAndCredits(
         eq(schema.transactions.isProjected, false),
         eq(schema.transactions.isTransfer, false),
         eq(schema.transactions.excludedFromTotals, false),
-    eq(schema.transactions.excludedFromTotals, false),
         excludeAllProjectTxns(),
         gte(schema.transactions.amountIls, '0.01'), // positive
         windowFragment(w),
@@ -1875,7 +2075,10 @@ export interface ProjectBurnFinding {
   startDate: string | null;
 }
 
-export async function getProjectBurnRate(householdId: string): Promise<ProjectBurnFinding[]> {
+export async function getProjectBurnRate(
+  householdId: string,
+  anchorMonth: string,
+): Promise<ProjectBurnFinding[]> {
   const db = getDb();
 
   const projs = await db
@@ -1891,7 +2094,7 @@ export async function getProjectBurnRate(householdId: string): Promise<ProjectBu
   if (projs.length === 0) return [];
 
   const findings: ProjectBurnFinding[] = [];
-  const cur = currentBillingMonth();
+  const cur = anchorMonth;
   const burnWindow = addMonths(cur, -3); // average over last 3 months
 
   for (const p of projs) {
@@ -1972,7 +2175,11 @@ export interface DataQualitySummary {
   hasIssues: boolean;
 }
 
-export async function getDataQualitySummary(householdId: string, w: InsightWindow): Promise<DataQualitySummary> {
+export async function getDataQualitySummary(
+  householdId: string,
+  w: InsightWindow,
+  anchorMonth: string,
+): Promise<DataQualitySummary> {
   const db = getDb();
 
   // Last import per account
@@ -2024,7 +2231,7 @@ export async function getDataQualitySummary(householdId: string, w: InsightWindo
   const [untagged, lowConf, suspIns, unpaired, badPats] = await Promise.all([
     getUntaggedTransactions(householdId, w),
     getLowConfidenceCategorizations(householdId, w),
-    getSuspiciousInstallments(householdId),
+    getSuspiciousInstallments(householdId, anchorMonth),
     getMisTaggedTransferCandidates(householdId),
     getBadRecurringPatterns(householdId),
   ]);
@@ -2050,5 +2257,7 @@ export async function getDataQualitySummary(householdId: string, w: InsightWindo
   };
 }
 
-// Re-export commonly used helpers
-export { activeBillingMonth, currentBillingMonth };
+// (Historically re-exported activeBillingMonth/currentBillingMonth here.
+// Removed deliberately — see the contract note at the top of this file.
+// If you need them, import from '@fba/db' at the caller, NOT inside this
+// file's queries. The page resolves the anchor month and passes it in.)

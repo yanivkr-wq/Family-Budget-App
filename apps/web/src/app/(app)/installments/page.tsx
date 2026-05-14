@@ -4,6 +4,7 @@ import { getDb, schema } from '@fba/db';
 import { and, eq, count, sql } from 'drizzle-orm';
 import { formatIls } from '@fba/shared';
 import { CreditCard, Layers, TrendingDown, CalendarCheck } from 'lucide-react';
+import { Tile } from '@/components/ui/tile';
 import { InstallmentsList } from './installments-list';
 
 export const dynamic = 'force-dynamic';
@@ -68,9 +69,29 @@ export default async function InstallmentsPage() {
 
   const txCountMap = new Map(txCounts.map((r) => [r.installmentPlanId!, Number(r.cnt)]));
 
+  // ── Derive status from the data ──────────────────────────────────────────
+  // The DB `status` column is the canonical store, but it can drift: a plan
+  // can be edited directly (via the modal) to currentPaymentNo == totalPayments
+  // while leaving status='active'. The "advance payment" action auto-completes
+  // when reaching the final payment, but the modal/import paths don't.
+  //
+  // To keep the UI honest, we treat any active plan with currentPaymentNo >=
+  // totalPayments as COMPLETE for display purposes. The summary tiles, filter
+  // tabs, table status badge, and sort all read this derived value.
+  //
+  // The DB heals itself the next time a user edits or bulk-updates such a
+  // plan — see the auto-complete logic in actions.ts.
+  const isFullyPaid = (p: typeof plans[number]) =>
+    p.totalPayments !== null && p.currentPaymentNo >= p.totalPayments;
+  const derivedStatus = (p: typeof plans[number]): 'active' | 'complete' | 'cancelled' => {
+    if (p.status === 'cancelled') return 'cancelled';
+    if (p.status === 'complete') return 'complete';
+    return isFullyPaid(p) ? 'complete' : 'active';
+  };
+
   // ── Summary stats ────────────────────────────────────────────────────────
-  const active    = plans.filter((p) => p.status === 'active');
-  const complete  = plans.filter((p) => p.status === 'complete');
+  const active    = plans.filter((p) => derivedStatus(p) === 'active');
+  const complete  = plans.filter((p) => derivedStatus(p) === 'complete');
 
   // Monthly commitment = sum of active payment amounts
   const monthlyCommitment = active.reduce((s, p) => s + Math.abs(Number(p.paymentAmountIls)), 0);
@@ -85,20 +106,30 @@ export default async function InstallmentsPage() {
     return rem !== null ? s + rem * Math.abs(Number(p.paymentAmountIls)) : s;
   }, 0);
 
-  // Soonest end month among active plans with known total
+  // Soonest UPCOMING end month among active plans with known total.
+  // We deliberately exclude projected ends that have already passed — a
+  // stuck plan whose projected_end is months in the past shouldn't be
+  // surfaced as "closest to completion"; that's misleading. If every
+  // active plan is past its projected end (all stuck), show "—".
+  const currentYm = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit',
+  }).format(new Date()).slice(0, 7); // YYYY-MM
   const endMonths = active
     .map((p) => p.projectedEndMonth)
-    .filter(Boolean)
+    .filter((m): m is string => !!m && m >= currentYm)
     .sort();
   const soonestEnd = endMonths[0] ?? null;
 
   // ── Build enriched plan list for client ───────────────────────────────────
+  // Pass derived status (not raw DB status) — the list uses it for the badge,
+  // filter tabs, and sort. Bulk-status actions still write to the DB column;
+  // the read path just re-derives on next render.
   const enriched = plans.map((p) => ({
     ...p,
     paymentAmountIls: String(p.paymentAmountIls),
     accountName:      p.accountName ?? null,
     txCount:          txCountMap.get(p.id) ?? 0,
-    status:           (p.status ?? 'active') as 'active' | 'complete' | 'cancelled',
+    status:           derivedStatus(p),
   }));
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -110,32 +141,37 @@ export default async function InstallmentsPage() {
         <p className="text-sm text-muted-foreground">ניהול תוכניות תשלומים חודשיים</p>
       </header>
 
-      {/* ── Summary tiles ── */}
+      {/* ── Summary tiles — brand book §5.1: shared <Tile /> gives the
+            tonal icon-badge + tone-colored number for free. ── */}
       {plans.length > 0 && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <SummaryTile
-            icon={<CreditCard className="size-4 text-primary" />}
+          <Tile
+            tone="primary"
+            icon={<CreditCard className="size-3.5" />}
             label="הוצאה חודשית פעילה"
             value={formatIls(monthlyCommitment, { decimals: false })}
-            sub={`${active.length} תוכניות פעילות`}
+            caption={`${active.length} תוכניות פעילות`}
           />
-          <SummaryTile
-            icon={<TrendingDown className="size-4 text-destructive" />}
+          <Tile
+            tone="destructive"
+            icon={<TrendingDown className="size-3.5" />}
             label="סה״כ נותר לתשלום"
             value={totalRemaining > 0 ? formatIls(totalRemaining, { decimals: false }) : '—'}
-            sub="בכל התוכניות הפעילות"
+            caption="בכל התוכניות הפעילות"
           />
-          <SummaryTile
-            icon={<CalendarCheck className="size-4 text-success" />}
+          <Tile
+            tone="success"
+            icon={<CalendarCheck className="size-3.5" />}
             label="הושלמו"
             value={String(complete.length)}
-            sub="תוכניות שסיימנו"
+            caption="תוכניות שסיימנו"
           />
-          <SummaryTile
-            icon={<Layers className="size-4 text-muted-foreground" />}
+          <Tile
+            tone="neutral"
+            icon={<Layers className="size-3.5" />}
             label="הסתיימות קרובה"
             value={soonestEnd ? formatMonth(soonestEnd) : '—'}
-            sub="תוכנית פעילה הקרובה ביותר לסיום"
+            caption="תוכנית פעילה הקרובה ביותר לסיום"
           />
         </div>
       )}
@@ -157,20 +193,3 @@ function formatMonth(ym: string) {
   return `${HE_MONTHS[(m ?? 1) - 1]} ${y}`;
 }
 
-function SummaryTile({ icon, label, value, sub }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <div className="tile flex flex-col gap-1">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <p className="text-xl font-semibold tabular-nums">{value}</p>
-      {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
-    </div>
-  );
-}

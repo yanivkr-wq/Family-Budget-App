@@ -678,7 +678,7 @@ export default async function TransactionsPage(props: {
       </header>
 
       {noAccountsForView && (
-        <div className="rounded-md border border-amber-300/60 bg-amber-50/70 p-3 text-sm text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-100">
+        <div className="rounded-xl border border-warning/30 bg-warning-soft p-3 text-sm text-warning">
           אין חשבונות מסוג <strong>{view === 'business' ? 'עסקי' : 'אישי'}</strong>. כדי שתצוגה זו תציג נתונים, פתח חשבון מסוג זה תחת{' '}
           <Link href="/admin/accounts" className="underline">חשבונות</Link>.
         </div>
@@ -904,13 +904,14 @@ ${buildBreakdownText('המחזור הבא', nextCycleChargeDate, nextBreakdown, 
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {/* Current cycle */}
-      <div className={`flex flex-col gap-1 rounded-lg border px-4 py-3 text-sm ${
+      {/* Current cycle — brand book §1: success tone when already charged,
+          warning tone when pending. Both use the soft tonal fill. */}
+      <div className={`flex flex-col gap-1 rounded-xl border px-4 py-3 text-sm ${
         cycleCharged
-          ? 'border-success/30 bg-success/5'
-          : 'border-amber-300/50 bg-amber-50/60 dark:border-amber-700/40 dark:bg-amber-900/10'
+          ? 'border-success/30 bg-success-soft'
+          : 'border-warning/30 bg-warning-soft'
       }`}>
-        <div className={`flex items-center gap-1.5 font-medium ${cycleCharged ? 'text-success' : 'text-amber-800 dark:text-amber-300'}`}>
+        <div className={`flex items-center gap-1.5 font-medium ${cycleCharged ? 'text-success' : 'text-warning'}`}>
           {cycleCharged
             ? <><CheckCircle2 className="size-4 shrink-0" /><span>חויב ב-{fmtDate(cycleChargeDate)}</span></>
             : <><Clock className="size-4 shrink-0" /><span>יחויב ב-{fmtDate(cycleChargeDate)}{daysUntil > 0 && <span className="ms-1 text-xs font-normal opacity-70">(עוד {daysUntil} {daysUntil === 1 ? 'יום' : 'ימים'})</span>}</span></>
@@ -924,10 +925,11 @@ ${buildBreakdownText('המחזור הבא', nextCycleChargeDate, nextBreakdown, 
         </div>
       </div>
 
-      {/* Next cycle */}
+      {/* Next cycle — brand book §1: accent tone (teal) = "future / planned /
+          next cycle". Tokenized; no hardcoded blue. */}
       {nextCount > 0 && (
-        <div className="flex flex-col gap-1 rounded-lg border border-blue-200/60 bg-blue-50/40 px-4 py-3 text-sm dark:border-blue-800/40 dark:bg-blue-900/10">
-          <div className="flex items-center gap-1.5 font-medium text-blue-700 dark:text-blue-300">
+        <div className="flex flex-col gap-1 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-sm">
+          <div className="flex items-center gap-1.5 font-medium text-accent">
             <CalendarClock className="size-4 shrink-0" />
             <span>חיוב הבא — {fmtDate(nextCycleChargeDate)}</span>
             <InfoModalButton title={`מחזור חיוב הבא — ${fmtDate(nextCycleChargeDate)}`} body={nextInfo} />

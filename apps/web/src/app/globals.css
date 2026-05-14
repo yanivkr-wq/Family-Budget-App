@@ -57,8 +57,12 @@
     --chart-6: 358 55% 50%;           /* coral */
     --chart-7: 195 50% 40%;           /* sky */
 
-    /* Shape */
-    --radius: 0.625rem;
+    /* Shape — Phase 1 brand-book: bumped from 0.625rem (10px) to 1rem (16px)
+       so the entire app gets noticeably rounder. Cascades through every
+       rounded-lg/md/sm class via tailwind.config.ts (lg = --radius,
+       md = --radius - 2px, sm = --radius - 4px). Buttons go pill-shaped
+       separately via the .btn rule below. */
+    --radius: 1rem;
   }
 
   .dark {
@@ -140,9 +144,12 @@
 }
 
 @layer components {
-  /* Tile — primary surface for dashboard KPIs */
+  /* Tile — primary surface for dashboard KPIs.
+     Phase 1: bumped from rounded-xl (12px) to rounded-2xl (16px) so cards
+     align with the new --radius token. Combined with the pill-shaped buttons
+     this gives the dashboard a softer, more modern feel. */
   .tile {
-    @apply rounded-xl border bg-card p-4 transition-shadow hover:shadow-sm;
+    @apply rounded-2xl border bg-card p-4 transition-shadow hover:shadow-sm;
   }
 
   /* Tile heading number — large hero number */
@@ -163,9 +170,12 @@
     @apply w-full rounded-md border bg-background px-3 py-2 text-sm shadow-sm transition-colors focus:border-ring focus:shadow-md;
   }
 
-  /* Buttons */
+  /* Buttons — Phase 1 brand-book: pill-shaped (rounded-full) instead of
+     rounded-md, with slightly more horizontal padding (px-4) to balance the
+     pill. All variants inherit from .btn so primary/secondary/ghost/destructive
+     all become pills automatically. */
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
     min-height: 2.5rem; /* 40px — comfortable tap target */
   }
   .btn-primary {

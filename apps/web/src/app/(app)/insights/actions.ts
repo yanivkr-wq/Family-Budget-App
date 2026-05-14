@@ -14,7 +14,7 @@
 import { revalidatePath } from 'next/cache';
 import { and, eq, isNull } from 'drizzle-orm';
 import { auth } from '@/lib/auth';
-import { getDb, schema } from '@fba/db';
+import { getDb, schema, activeBillingMonth } from '@fba/db';
 import { getCategoryTrend, type CategoryTrendBucket } from './queries';
 
 export interface CategoryTrendDrillResult {
@@ -34,7 +34,9 @@ export interface CategoryTrendDrillResult {
 export async function fetchCategoryTrendLevel(drillPath: string[]): Promise<CategoryTrendDrillResult> {
   const session = await auth();
   if (!session?.user) throw new Error('Unauthorized');
-  return getCategoryTrend(session.user.householdId, drillPath);
+  // Same anchor as the page (activeBillingMonth(10)) — keeps drilled-down
+  // months in sync with the parent card on /insights.
+  return getCategoryTrend(session.user.householdId, drillPath, activeBillingMonth(10));
 }
 
 /**

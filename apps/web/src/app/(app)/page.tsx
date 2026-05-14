@@ -201,6 +201,7 @@ export default async function DashboardPage(props: {
     cumulativeOpeningRow,
     cumulativeTxnRow,
     cashFlowSumsRow,
+    cashFlowByPurposeRows,
   ] = await Promise.all([
     // (a) spend/income totals by category
     noAccountsForView
@@ -386,6 +387,39 @@ export default async function DashboardPage(props: {
           .from(schema.transactions)
           .where(and(...baseConditions))
           .then(([r]) => r ?? { income: '0', spent: '0' }),
+
+    // (l) Per-bucket breakdown for the multi-account views (combined +
+    // household). Lets the KPI tiles show a small "אישי X · עסקי Y" (and
+    // for household: also "· פרויקטים Z") verification beneath each total
+    // so the user can confirm the combined number is the sum of the parts.
+    //
+    // Bucketing rule (CASE WHEN in SQL so it's one query):
+    //   - project_id IS NOT NULL  → 'projects' bucket (takes precedence
+    //                                over account.purpose)
+    //   - else                    → account.purpose ('personal' / 'business'
+    //                                / null → 'other')
+    //
+    // For COMBINED view, project rows are already filtered out by
+    // baseConditions (excludeHiddenProjectTxns), so the 'projects' bucket
+    // stays empty and only personal/business surface.
+    // For HOUSEHOLD view, baseConditions does NOT apply that filter, so
+    // project rows hit the 'projects' bucket and stay separated from the
+    // personal/business spending the user does in regular life.
+    //
+    // For personal / business / no-accounts views we skip this entirely —
+    // a breakdown there would equal the main figure (single bucket).
+    (view !== 'combined' && view !== 'household') || noAccountsForView
+      ? Promise.resolve([] as Array<{ bucket: string | null; income: string; spent: string }>)
+      : db
+          .select({
+            bucket: sql<string | null>`case when ${schema.transactions.projectId} is not null then 'projects' else ${schema.accounts.purpose} end`,
+            income: sql<string>`coalesce(sum(case when ${schema.transactions.amountIls} >= 0 then ${schema.transactions.amountIls} else 0 end), 0)`,
+            spent: sql<string>`coalesce(sum(case when ${schema.transactions.amountIls} <  0 then ${schema.transactions.amountIls} else 0 end), 0)`,
+          })
+          .from(schema.transactions)
+          .innerJoin(schema.accounts, eq(schema.accounts.id, schema.transactions.accountId))
+          .where(and(...baseConditions))
+          .groupBy(sql`case when ${schema.transactions.projectId} is not null then 'projects' else ${schema.accounts.purpose} end`),
   ]);
 
   // ── Synchronous derivations from the parallel batch results ───────────────
@@ -418,6 +452,31 @@ export default async function DashboardPage(props: {
   // positive and negative transactions (see (k) above for full explanation).
   const totalIncome = Number(cashFlowSumsRow?.income ?? 0);
   const totalSpent = Number(cashFlowSumsRow?.spent ?? 0);
+
+  // Per-bucket breakdown for the multi-account KPI captions (combined +
+  // household). Aggregated server-side in (l) above; empty in any other view.
+  // Bucket precedence: 'projects' > account.purpose ('personal'/'business') >
+  // 'other' (null/unknown purpose). The 'projects' bucket only fires for
+  // household view (combined excludes project rows upstream).
+  const purposeBreakdown = (cashFlowByPurposeRows ?? []).reduce(
+    (acc, r) => {
+      const bucket =
+        r.bucket === 'projects' ? acc.projects :
+        r.bucket === 'personal' ? acc.personal :
+        r.bucket === 'business' ? acc.business :
+        acc.other;
+      bucket.income += Number(r.income);
+      bucket.spent += Number(r.spent);
+      return acc;
+    },
+    {
+      personal: { income: 0, spent: 0 },
+      business: { income: 0, spent: 0 },
+      projects: { income: 0, spent: 0 },
+      other:    { income: 0, spent: 0 },
+    },
+  );
+  const showBreakdown = view === 'combined' || view === 'household';
 
   // Suspicious-income warning STILL iterates the per-category `totals` so we
   // surface mis-tagged transfers at the category level (a +1K row in an
@@ -712,7 +771,7 @@ export default async function DashboardPage(props: {
     .map((r) => ({
       name: r.cat.nameHe,
       value: r.actual,
-      color: r.cat.color ?? 'hsl(215 65% 35%)',
+      color: r.cat.color ?? 'hsl(var(--chart-1))',
     }));
 
   const hasData = totals.length > 0;
@@ -793,7 +852,7 @@ export default async function DashboardPage(props: {
       </header>
 
       {noAccountsForView && (
-        <div className="rounded-md border border-warning/40 bg-warning-soft p-3 text-sm text-warning">
+        <div className="rounded-xl border border-warning/30 bg-warning-soft p-3 text-sm text-warning">
           לא סומנו חשבונות{' '}
           {/* household + combined never trigger noAccountsForView (no filter),
               so the only realistic branches here are business and personal. */}
@@ -812,24 +871,57 @@ export default async function DashboardPage(props: {
           import time. The amount is currently inflating "Income" and the
           fix is one-click in the transactions edit modal. */}
       {suspiciousIncomeIls > 0 && (
-        <div className="rounded-md border border-amber-300/60 bg-amber-50/70 p-3 text-sm text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-100">
-          <p className="font-medium">
-            ⚠️ זוהו {formatIls(suspiciousIncomeIls, { decimals: false })} בתנועות חיוביות גדולות בקטגוריות הוצאה
-          </p>
-          <p className="mt-1 text-xs">
-            לרוב אלו <strong>העברות בין החשבונות שלך</strong> (למשל הפקדה מבנק לבנק) שלא סומנו כ-&ldquo;העברה&rdquo; בעת הייבוא.
-            הן מנפחות את הכרטיס &ldquo;הכנסות&rdquo; — המאזן עצמו ({formatIls(balance, { decimals: false })}) נכון, אבל הפיצול בין הכנסה להוצאה מטעה.
-            פתח את <Link href={`/transactions?month=${month}`} className="underline font-medium">דף התנועות</Link>,
-            מצא את התנועה הגדולה (סנן לפי הקטגוריה הרלוונטית), פתח עריכה וסמן &ldquo;זוהי העברה בין חשבונות&rdquo;.
-          </p>
+        // Brand book §6.4 / §1: warning-tone banner. Tokenized — no hard-coded
+        // amber. Icon badge replaces the emoji per §5.4.
+        <div className="flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
+          <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-card text-warning">
+            <BadgeAlert className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">
+              זוהו {formatIls(suspiciousIncomeIls, { decimals: false })} בתנועות חיוביות גדולות בקטגוריות הוצאה
+            </p>
+            <p className="mt-1 text-xs text-warning/90">
+              לרוב אלו <strong>העברות בין החשבונות שלך</strong> (למשל הפקדה מבנק לבנק) שלא סומנו כ-&ldquo;העברה&rdquo; בעת הייבוא.
+              הן מנפחות את הכרטיס &ldquo;הכנסות&rdquo; — המאזן עצמו ({formatIls(balance, { decimals: false })}) נכון, אבל הפיצול בין הכנסה להוצאה מטעה.
+              פתח את <Link href={`/transactions?month=${month}`} className="font-medium underline">דף התנועות</Link>,
+              מצא את התנועה הגדולה (סנן לפי הקטגוריה הרלוונטית), פתח עריכה וסמן &ldquo;זוהי העברה בין חשבונות&rdquo;.
+            </p>
+          </div>
         </div>
       )}
 
+      {/* Per-purpose breakdown caption shown only in the combined view, so
+          the user can validate combined-total = personal + business at a
+          glance. Personal/business/household tabs skip it — their own total
+          already IS the breakdown for that view. */}
       <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <Tile
+          tone="destructive"
           label={he.dashboard.spentSoFar}
           value={formatIls(spent, { decimals: false })}
-          caption={isCurrentMonth ? `יום ${day} מתוך ${daysInMonth}` : undefined}
+          caption={
+            showBreakdown ? (
+              <>
+                {isCurrentMonth && (
+                  <span className="block">יום {day} מתוך {daysInMonth}</span>
+                )}
+                <span className="block text-2xs text-muted-foreground/80 tabular-nums">
+                  אישי {formatIls(Math.abs(purposeBreakdown.personal.spent), { decimals: false })}
+                  {' · '}
+                  עסקי {formatIls(Math.abs(purposeBreakdown.business.spent), { decimals: false })}
+                  {purposeBreakdown.projects.spent !== 0 && (
+                    <> {' · '} פרויקטים {formatIls(Math.abs(purposeBreakdown.projects.spent), { decimals: false })}</>
+                  )}
+                  {purposeBreakdown.other.spent !== 0 && (
+                    <> {' · '} אחר {formatIls(Math.abs(purposeBreakdown.other.spent), { decimals: false })}</>
+                  )}
+                </span>
+              </>
+            ) : (
+              isCurrentMonth ? `יום ${day} מתוך ${daysInMonth}` : undefined
+            )
+          }
           icon={<TrendingDown className="size-3.5" />}
           info={
             'איך החישוב עובד:\n' +
@@ -851,6 +943,21 @@ export default async function DashboardPage(props: {
           label="הכנסות"
           value={formatIls(totalIncome, { decimals: false })}
           tone={totalIncome > 0 ? 'success' : 'neutral'}
+          caption={
+            showBreakdown ? (
+              <span className="block text-2xs text-muted-foreground/80 tabular-nums">
+                אישי {formatIls(purposeBreakdown.personal.income, { decimals: false })}
+                {' · '}
+                עסקי {formatIls(purposeBreakdown.business.income, { decimals: false })}
+                {purposeBreakdown.projects.income !== 0 && (
+                  <> {' · '} פרויקטים {formatIls(purposeBreakdown.projects.income, { decimals: false })}</>
+                )}
+                {purposeBreakdown.other.income !== 0 && (
+                  <> {' · '} אחר {formatIls(purposeBreakdown.other.income, { decimals: false })}</>
+                )}
+              </span>
+            ) : undefined
+          }
           icon={<TrendingUp className="size-3.5" />}
           info={
             'איך החישוב עובד:\n' +
@@ -873,6 +980,24 @@ export default async function DashboardPage(props: {
           label={he.dashboard.monthBalance}
           value={formatIls(balance, { decimals: false })}
           tone={balance >= 0 ? 'success' : 'destructive'}
+          caption={
+            showBreakdown ? (
+              <span className="block text-2xs text-muted-foreground/80 tabular-nums">
+                {/* Per-bucket balance = that bucket's income − its expenses.
+                    `spent` in purposeBreakdown is the signed negative sum,
+                    so income+spent yields the signed balance directly. */}
+                אישי {formatIls(purposeBreakdown.personal.income + purposeBreakdown.personal.spent, { decimals: false })}
+                {' · '}
+                עסקי {formatIls(purposeBreakdown.business.income + purposeBreakdown.business.spent, { decimals: false })}
+                {(purposeBreakdown.projects.income !== 0 || purposeBreakdown.projects.spent !== 0) && (
+                  <> {' · '} פרויקטים {formatIls(purposeBreakdown.projects.income + purposeBreakdown.projects.spent, { decimals: false })}</>
+                )}
+                {(purposeBreakdown.other.income !== 0 || purposeBreakdown.other.spent !== 0) && (
+                  <> {' · '} אחר {formatIls(purposeBreakdown.other.income + purposeBreakdown.other.spent, { decimals: false })}</>
+                )}
+              </span>
+            ) : undefined
+          }
           icon={<Wallet className="size-3.5" />}
           info={
             'איך החישוב עובד:\n' +
@@ -903,7 +1028,11 @@ export default async function DashboardPage(props: {
         <Tile
           label="יתרה מצטברת בפועל"
           value={formatIls(cumulativeBalanceIls, { decimals: false })}
-          tone={cumulativeBalanceIls >= 0 ? 'success' : 'destructive'}
+          // Phase 2 brand-book: positive cumulative standing reads navy
+          // (primary) — calm/informational — to distinguish it from the
+          // green "מאזן החודש" celebration tone. Negative stays destructive
+          // because an overdrawn cumulative position IS a critical signal.
+          tone={cumulativeBalanceIls >= 0 ? 'primary' : 'destructive'}
           icon={<Banknote className="size-3.5" />}
           caption={`לסוף ${formatMonthHe(month)}`}
           info={
@@ -948,7 +1077,12 @@ export default async function DashboardPage(props: {
               ? formatIls(projectedEom, { decimals: false })
               : formatIls(projectedThisMonth, { decimals: false })
           }
-          tone={isCurrentMonth ? (projectedEom >= 0 ? 'success' : 'warning') : 'accent'}
+          // Phase 2 brand-book: forecast is forward-looking → always amber
+          // (warning) when current month, regardless of sign. The dashboard
+          // already has green for "income/balance" and red for "expenses";
+          // amber separates "look ahead" from "here and now". Future months
+          // use accent (teal) for "projected/planned".
+          tone={isCurrentMonth ? 'warning' : 'accent'}
           caption={
             isCurrentMonth
               ? hasEnoughDataForProjection
@@ -1013,7 +1147,7 @@ export default async function DashboardPage(props: {
       {/* ── C2: charge-date cash-flow bar ── */}
       {isCurrentMonth && (alreadyChargedIls !== 0 || pendingChargedIls !== 0) && (
         <div
-          className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg border bg-card px-4 py-2.5 text-sm"
+          className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-xl border bg-card px-4 py-2.5 text-sm"
           dir="rtl"
         >
           <span className="flex items-center gap-1.5 text-muted-foreground">
@@ -1092,7 +1226,7 @@ export default async function DashboardPage(props: {
                     const pct = hasTarget
                       ? Math.min(100, Math.round((actual / target!) * 100))
                       : Math.round((actual / maxActual) * 100);
-                    const barColor = cat.color ?? 'hsl(215 65% 35%)';
+                    const barColor = cat.color ?? 'hsl(var(--chart-1))';
                     const overBudget = hasTarget && pct >= 100;
                     const nearBudget = hasTarget && pct >= 80 && pct < 100;
                     const finalBarColor = overBudget
@@ -1153,10 +1287,15 @@ export default async function DashboardPage(props: {
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {activeRecurringPatterns.length > 0 && (
                 <section className="tile space-y-4" dir="rtl">
-                  {/* Header */}
+                  {/* Header — brand book §5.5: tonal icon-badge. Recurring
+                      monthly commitments map to the same accent tone as the
+                      "הוצאות קבועות" KPI tile, keeping the visual identity
+                      consistent across both surfaces. */}
                   <div className="flex items-center justify-between">
                     <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                      <Repeat className="size-4" />
+                      <span className="inline-flex size-7 items-center justify-center rounded-full bg-accent-soft text-accent">
+                        <Repeat className="size-3.5" />
+                      </span>
                       הוצאות קבועות (תמונת מצב חודשית)
                     </h2>
                     <Link
@@ -1270,10 +1409,14 @@ export default async function DashboardPage(props: {
               <div className="space-y-6">
               {activeGoals.length > 0 && (
                 <section className="tile space-y-4">
-                  {/* header */}
+                  {/* header — brand book §5.5: section heading with tonal
+                      icon-badge. Savings/goals = success tone (long-term
+                      growth). */}
                   <div className="flex items-center justify-between">
                     <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                      <PiggyBank className="size-4 text-emerald-600" />
+                      <span className="inline-flex size-7 items-center justify-center rounded-full bg-success-soft text-success">
+                        <PiggyBank className="size-3.5" />
+                      </span>
                       חיסכון ויעדים
                     </h2>
                     <Link href="/savings" className="text-xs text-primary hover:underline">
@@ -1287,7 +1430,7 @@ export default async function DashboardPage(props: {
                       const current = Number(g.currentAmountIls);
                       const target = g.targetAmountIls !== null ? Number(g.targetAmountIls) : null;
                       const pct = target && target > 0 ? Math.min(100, Math.round((current / target) * 100)) : null;
-                      const barColor = g.color ?? '#10b981';
+                      const barColor = g.color ?? 'hsl(var(--success))';
                       return (
                         <div key={g.id} className="space-y-1.5">
                           <div className="flex items-baseline justify-between gap-3">
@@ -1391,12 +1534,16 @@ function ProjectsSummaryWidget({
   const grandTotal = projects.reduce((s, p) => s + Number(p.totalSpent), 0);
 
   return (
-    <section className="rounded-xl border bg-card overflow-hidden" dir="rtl">
+    <section className="overflow-hidden rounded-2xl border bg-card" dir="rtl">
+      {/* Heading row — brand book §5.5 + §1: projects = accent tone (teal).
+          Count chip uses .pill shape with accent-soft fill. */}
       <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <Briefcase className="size-4 text-amber-600" />
+        <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <span className="inline-flex size-7 items-center justify-center rounded-full bg-accent-soft text-accent">
+            <Briefcase className="size-3.5" />
+          </span>
           פרויקטים פעילים
-          <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+          <span className="pill bg-accent-soft text-accent">
             {projects.length}
           </span>
         </h2>
@@ -1404,11 +1551,9 @@ function ProjectsSummaryWidget({
           ניהול ←
         </Link>
       </div>
-      {/* Disclaimer banner — explain WHY these don't appear in monthly tiles.
-          Wording acknowledges the per-row "include in monthly" override so the
-          user understands why the totals here ≠ what they see in expense KPIs.
-          All icons are Lucide (matches the rest of the app); no emoji. */}
-      <div className="border-b bg-amber-50/60 px-4 py-2 text-[11px] text-amber-900 dark:bg-amber-900/10 dark:text-amber-200">
+      {/* Disclaimer banner — informational, tied to the section's accent
+          tone. Tokenized — no hardcoded amber. */}
+      <div className="border-b bg-accent-soft/50 px-4 py-2 text-[11px] text-accent">
         <span className="inline-flex items-center gap-1">
           <Lightbulb className="size-3 shrink-0" />
           <span>
@@ -1418,7 +1563,7 @@ function ProjectsSummaryWidget({
         </span>
         <br />
         תנועות שסומנו ב-
-        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-medium text-accent">
           <CalendarCheck className="size-2.5" />
           גם חודשי
         </span>
@@ -1814,77 +1959,75 @@ function computeInsights(args: {
 
 // ── Severity visual config ────────────────────────────────────────────────────
 
+// Phase 3 brand-book: each insight is its own rounded tone-soft card, no
+// shared row dividers, no border-stripe. Fields:
+//   cardBg        tone-soft background for the whole insight card
+//   pillBg/pillText  the small severity badge in the card's end
+//   iconColor     tone foreground (also applied to the icon inside the badge)
+//   label         the Hebrew severity label
 const SEVERITY_CFG: Record<InsightSeverity, {
-  sectionBg:   string;
-  rowBg:       string;
-  rowBorder:   string;
-  badgeBg:     string;
-  badgeText:   string;
-  iconColor:   string;
-  label:       string;
+  cardBg:    string;
+  pillBg:    string;
+  pillText:  string;
+  iconColor: string;
+  label:     string;
 }> = {
   critical: {
-    sectionBg: 'border-destructive/30',
-    rowBg:     'bg-destructive/5',
-    rowBorder: 'border-destructive/20',
-    badgeBg:   'bg-destructive',
-    badgeText: 'text-primary-foreground',
+    cardBg:    'bg-destructive-soft',
+    pillBg:    'bg-destructive',
+    pillText:  'text-primary-foreground',
     iconColor: 'text-destructive',
     label:     'קריטי',
   },
   warning: {
-    sectionBg: 'border-warning/30',
-    rowBg:     'bg-warning-soft',
-    rowBorder: 'border-warning/20',
-    badgeBg:   'bg-warning',
-    badgeText: 'text-primary-foreground',
+    cardBg:    'bg-warning-soft',
+    pillBg:    'bg-warning',
+    pillText:  'text-primary-foreground',
     iconColor: 'text-warning',
     label:     'שים לב',
   },
   info: {
-    sectionBg: 'border-primary/20',
-    rowBg:     'bg-primary-soft/60',
-    rowBorder: 'border-primary/15',
-    badgeBg:   'bg-primary-soft',
-    badgeText: 'text-primary',
+    cardBg:    'bg-primary-soft',
+    pillBg:    'bg-primary-soft',
+    pillText:  'text-primary',
     iconColor: 'text-primary',
     label:     'מידע',
   },
   positive: {
-    sectionBg: 'border-success/30',
-    rowBg:     'bg-success-soft/50',
-    rowBorder: 'border-success/20',
-    badgeBg:   'bg-success-soft',
-    badgeText: 'text-success',
+    cardBg:    'bg-success-soft',
+    pillBg:    'bg-success-soft',
+    pillText:  'text-success',
     iconColor: 'text-success',
     label:     'חיובי',
   },
 };
 
 function InsightsWidget({ insights, month }: { insights: Insight[]; month: string }) {
-  // We always render the widget — even with zero active insights — so the
-  // user can open the "what does this widget watch?" catalog and understand
-  // what alerts to expect. The per-row severity badges already convey count
-  // visually, so the header stays minimal.
-
-  void month; // used only by callers for href values inside computeInsights
+  // Phase 3: each insight is its own rounded tone-soft card stacked in a
+  // gap-2 column. The first insight gets a Spotlight treatment — a larger
+  // icon badge, an uppercase eyebrow label, and a bigger title — to surface
+  // the most important alert without a separate hero section.
+  void month;
 
   return (
-    <section className="rounded-xl border bg-card overflow-hidden" dir="rtl">
+    <section className="rounded-2xl border bg-card p-4" dir="rtl">
       {/* header */}
-      <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <Sparkles className="size-4 text-primary" />
+      <div className="mb-3 flex items-center justify-between gap-2">
+        {/* Brand book §5.5: tonal icon-badge on section heading. The Sparkles
+            icon in primary-soft pairs the AI section with the same navy
+            identity used by primary-tone KPIs. */}
+        <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <span className="inline-flex size-7 items-center justify-center rounded-full bg-primary-soft text-primary">
+            <Sparkles className="size-3.5" />
+          </span>
           תובנות חכמות
         </h2>
-        {/* Info icon — opens the "what insights does this widget watch?"
-            catalog in a modal. Most useful when no insights are firing. */}
         <InsightsCatalogToggle />
       </div>
 
       {/* empty state */}
       {insights.length === 0 && (
-        <div className="px-4 py-6 text-center">
+        <div className="rounded-xl bg-muted/30 px-4 py-6 text-center">
           <p className="text-sm text-muted-foreground">אין תובנות פעילות כרגע</p>
           <p className="mt-1 text-xs text-muted-foreground/70">
             לחץ על אייקון ה-<Info className="inline size-3" /> למעלה כדי לראות אילו תובנות המערכת בודקת
@@ -1892,47 +2035,118 @@ function InsightsWidget({ insights, month }: { insights: Insight[]; month: strin
         </div>
       )}
 
-      {/* insight rows */}
-      <ul className="divide-y">
-        {insights.map((insight) => {
-          const cfg = SEVERITY_CFG[insight.severity];
-          const Icon = INSIGHT_ICONS[insight.icon];
-          const inner = (
-            <div className={cn('flex items-start gap-3 px-4 py-3', cfg.rowBg, insight.href && 'hover:brightness-95 transition-all')}>
-              <Icon className={cn('size-4 shrink-0 mt-0.5', cfg.iconColor)} />
-              <div className="flex-1 min-w-0">
-                {/* Title row: title + Info button inline at the end */}
-                <p className="flex items-center gap-1.5 text-sm font-medium leading-snug">
-                  <span className="min-w-0">{insight.title}</span>
-                  {insight.explanation && (
-                    // Client island — opens a modal popup with the calculation
-                    // breakdown. Stops click propagation so it doesn't trigger
-                    // the row's parent <Link>.
-                    <InsightDetailsToggle
-                      title={insight.title}
-                      explanation={insight.explanation}
-                      iconName={insight.icon}
-                      iconColorClass={cfg.iconColor}
+      {/* insight cards. Two visual treatments to avoid the "stack of tonal
+          bars" problem when many insights fire at once:
+            • Spotlight (first insight): full tone-soft card, eyebrow label,
+              big 40px icon badge, larger title. Visual anchor.
+            • Rest: white-background rows in a single bordered card, divided
+              by hairlines. Severity is signalled by a 3px tone-colored
+              start-edge stripe + tone-soft icon badge + severity pill.
+              Functional and scannable — color is an accent, not a fill. */}
+      {insights.length > 0 && (
+        <div className="space-y-3">
+          {/* Spotlight */}
+          {(() => {
+            const insight = insights[0];
+            const cfg = SEVERITY_CFG[insight.severity];
+            const Icon = INSIGHT_ICONS[insight.icon];
+            const inner = (
+              <div className={cn('rounded-2xl p-4 transition-all', cfg.cardBg, insight.href && 'hover:brightness-95')}>
+                <div className="flex items-start gap-3">
+                  <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-card">
+                    <Icon className={cn('size-5', cfg.iconColor)} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className={cn('text-[10px] font-semibold uppercase tracking-wider', cfg.iconColor)}>
+                      {cfg.label}
+                    </p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-[15px] font-semibold leading-snug">
+                      <span className="min-w-0">{insight.title}</span>
+                      {insight.explanation && (
+                        <InsightDetailsToggle
+                          title={insight.title}
+                          explanation={insight.explanation}
+                          iconName={insight.icon}
+                          iconColorClass={cfg.iconColor}
+                        />
+                      )}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">{insight.body}</p>
+                  </div>
+                  {insight.href && <ChevronLeft className="size-4 shrink-0 self-center text-muted-foreground" />}
+                </div>
+              </div>
+            );
+            return insight.href ? <Link href={insight.href}>{inner}</Link> : inner;
+          })()}
+
+          {/* Rest — compact divided list, white bg, tone signalled by edge
+              stripe + small icon badge. Tighter than spotlight; lets the
+              spotlight breathe and keeps the list scannable. */}
+          {insights.length > 1 && (
+            <div className="overflow-hidden rounded-xl border bg-card divide-y">
+              {insights.slice(1).map((insight) => {
+                const cfg = SEVERITY_CFG[insight.severity];
+                const Icon = INSIGHT_ICONS[insight.icon];
+                const inner = (
+                  <div
+                    className={cn(
+                      'relative flex items-start gap-3 px-3 py-2.5 transition-colors',
+                      insight.href && 'hover:bg-muted/40',
+                    )}
+                  >
+                    {/* Tone-colored start-edge stripe (3px) — replaces the
+                        full tone-soft fill so multiple rows don't merge into
+                        a wash of color. */}
+                    <span
+                      className={cn(
+                        'absolute inset-y-2 start-0 w-[3px] rounded-full',
+                        cfg.iconColor.replace('text-', 'bg-'),
+                      )}
+                      aria-hidden="true"
                     />
-                  )}
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{insight.body}</p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', cfg.badgeBg, cfg.badgeText)}>
-                  {cfg.label}
-                </span>
-                {insight.href && <ChevronLeft className="size-3.5 text-muted-foreground" />}
-              </div>
+                    <span
+                      className={cn(
+                        'inline-flex size-7 shrink-0 items-center justify-center rounded-full ms-1',
+                        cfg.cardBg,
+                      )}
+                    >
+                      <Icon className={cn('size-3.5', cfg.iconColor)} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-center gap-1.5 text-sm font-medium leading-snug">
+                        <span className="min-w-0">{insight.title}</span>
+                        {insight.explanation && (
+                          <InsightDetailsToggle
+                            title={insight.title}
+                            explanation={insight.explanation}
+                            iconName={insight.icon}
+                            iconColorClass={cfg.iconColor}
+                          />
+                        )}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{insight.body}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2 self-center">
+                      <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', cfg.pillBg, cfg.pillText)}>
+                        {cfg.label}
+                      </span>
+                      {insight.href && <ChevronLeft className="size-3.5 text-muted-foreground" />}
+                    </div>
+                  </div>
+                );
+                return insight.href ? (
+                  <Link key={insight.id} href={insight.href} className="block">
+                    {inner}
+                  </Link>
+                ) : (
+                  <div key={insight.id}>{inner}</div>
+                );
+              })}
             </div>
-          );
-          return (
-            <li key={insight.id} className={cn('border-r-4', cfg.rowBorder)}>
-              {insight.href ? <Link href={insight.href}>{inner}</Link> : inner}
-            </li>
-          );
-        })}
-      </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }

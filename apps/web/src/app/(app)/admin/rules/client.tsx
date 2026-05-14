@@ -398,8 +398,9 @@ export function RulesAdminClient(props: {
                   className={cn(
                     'border-b last:border-0 hover:bg-accent/20 transition-colors',
                     !r.isActive && 'opacity-50',
-                    // Yellow flash when arriving via ?highlight=<id>; clears after 2.5s.
-                    highlightId === r.id && 'bg-amber-100/70 dark:bg-amber-900/30',
+                    // Warning-tone flash when arriving via ?highlight=<id>;
+                    // clears after 2.5s. Brand book §1.
+                    highlightId === r.id && 'bg-warning-soft',
                   )}
                 >
                   <td className="px-3 py-3 align-top">

@@ -147,7 +147,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
         <div>{formatDateHe(t.date)}</div>
         {chargeDateDiffersFromGroup && isPendingCharge && (
           <div
-            className="mt-0.5 inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+            className="mt-0.5 inline-flex items-center gap-0.5 rounded-full bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning"
             title={`חיוב יחיד בתאריך אחר מהקבוצה: ${effectiveChargeDate}`}
           >
             <Clock className="size-2.5 shrink-0" />
@@ -179,7 +179,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
           <span>{t.merchant}</span>
           {isProjected && (
             <span
-              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning"
               title={
                 'תחזית של האפליקציה — לא חיוב אמיתי. ' +
                 'נוצר אוטומטית מתוך תוכנית התשלומים שמופיעה בעמוד תשלומים. ' +
@@ -189,12 +189,12 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
             >
               <Clock className="size-2.5 shrink-0" />
               צפוי
-              <span aria-hidden className="ms-0.5 inline-flex size-3 items-center justify-center rounded-full bg-amber-200/80 text-[8px] font-bold text-amber-800 dark:bg-amber-800/40 dark:text-amber-200">i</span>
+              <span aria-hidden className="ms-0.5 inline-flex size-3 items-center justify-center rounded-full bg-warning/30 text-[8px] font-bold text-warning">i</span>
             </span>
           )}
           {isForex && (
             <span
-              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-primary-soft px-1.5 py-0.5 text-[10px] font-medium text-primary"
               title={`עסקה בחו"ל — מקור: ${t.originalAmount?.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${t.originalCurrency}, חיוב מיידי`}
             >
               <Globe2 className="size-2.5 shrink-0" />
@@ -203,7 +203,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
           )}
           {isTransfer && (
             <span
-              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
               title="העברה בין חשבונות — שורה זו זוּוגה לחיוב נגדי בחשבון אחר"
             >
               <ArrowLeftRight className="size-2.5 shrink-0" />
@@ -295,7 +295,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
     renderCell: ({ txIsManual, t }) => {
       if (txIsManual) {
         return (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="הוזן ידנית">
+          <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" title="הוזן ידנית">
             <User className="size-2.5" />ידני
           </span>
         );
@@ -312,7 +312,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
         tooltip = `קובץ: ${t.importFilename}${dateStr ? `\nיובא: ${dateStr}` : ''}`;
       }
       return (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" title={tooltip}>
+        <span className="inline-flex items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent" title={tooltip}>
           <Upload className="size-2.5" />ייבוא
         </span>
       );
@@ -405,7 +405,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
           <Link
             href={`/admin/rules?edit=${t.appliedRuleId}`}
             onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-200 dark:bg-sky-900/40 dark:text-sky-300"
+            className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-primary-soft px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary-soft/80"
             title={t.ruleName ? `כלל: ${t.ruleName} (לחץ לעריכה)` : 'לחץ לעריכת הכלל'}
           >
             <Zap className="size-2.5" />כלל
@@ -414,7 +414,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
       }
       if (isTaggedExport) {
         return (
-          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" title="קטגוריה הגיעה מהקובץ עצמו (תיוג ידני בקובץ המקור)">
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-success-soft px-1.5 py-0.5 text-[10px] font-medium text-success" title="קטגוריה הגיעה מהקובץ עצמו (תיוג ידני בקובץ המקור)">
             <UserCheck className="size-2.5" />תיוג
           </span>
         );
@@ -431,7 +431,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
             <Link
               href={`/admin/rules?edit=${t.appliedRuleId}`}
               onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-300"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-accent-soft/80"
               title={tooltip}
             >
               <Sparkles className="size-2.5" />AI
@@ -439,7 +439,7 @@ export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
           );
         }
         return (
-          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title={tooltip}>
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent" title={tooltip}>
             <Sparkles className="size-2.5" />AI
           </span>
         );

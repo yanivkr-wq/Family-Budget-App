@@ -351,7 +351,7 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
             <Stat icon={<Search className="size-3.5 text-accent" />} label="קטגוריה (שם בית עסק)" value={result.merchantKeywordCategorized} />
           )}
           {result.aiCategorized > 0 && (
-            <Stat icon={<Sparkles className="size-3.5 text-purple-600" />} label={`קטגוריה (AI · ${result.aiRulesCreated} כללים נוצרו)`} value={result.aiCategorized} />
+            <Stat icon={<Sparkles className="size-3.5 text-accent" />} label={`קטגוריה (AI · ${result.aiRulesCreated} כללים נוצרו)`} value={result.aiCategorized} />
           )}
           {result.recurringPatternsCreated > 0 && (
             <Stat icon={<Repeat className="size-3.5 text-primary" />} label="הוצאות קבועות נוצרו" value={result.recurringPatternsCreated} />
@@ -369,7 +369,7 @@ function ResultCard({ result }: { result: BankExportImportResult }) {
             <Stat icon={<Link2 className="size-3.5 text-success" />} label="זוגות העברה זוּוגו" value={result.transferPairsLinked} />
           )}
           {result.ccSettlementsFlagged > 0 && (
-            <Stat icon={<CreditCard className="size-3.5 text-amber-600" />} label="חיובי כרטיס דוּלגו" value={result.ccSettlementsFlagged} />
+            <Stat icon={<CreditCard className="size-3.5 text-warning" />} label="חיובי כרטיס דוּלגו" value={result.ccSettlementsFlagged} />
           )}
           {result.newPlansCreated > 0 && (
             <Stat icon={<CreditCard className="size-3.5 text-accent" />} label="תוכניות תשלומים נוצרו" value={result.newPlansCreated} />

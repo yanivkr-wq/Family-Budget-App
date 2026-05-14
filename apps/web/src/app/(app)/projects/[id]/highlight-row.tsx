@@ -22,11 +22,11 @@ export function HighlightRowFromUrl() {
     if (!hl) return;
     const el = document.getElementById(`project-txn-row-${hl}`);
     if (!el) return;
-    // Scroll into view + flash amber for 3 seconds.
+    // Scroll into view + flash warning-tone for 3 seconds (brand book §1).
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('!bg-amber-100', 'dark:!bg-amber-900/40', 'ring-2', 'ring-amber-400');
+    el.classList.add('!bg-warning-soft', 'ring-2', 'ring-warning');
     const t = setTimeout(() => {
-      el.classList.remove('!bg-amber-100', 'dark:!bg-amber-900/40', 'ring-2', 'ring-amber-400');
+      el.classList.remove('!bg-warning-soft', 'ring-2', 'ring-warning');
     }, 3000);
     return () => clearTimeout(t);
   }, [searchParams]);

@@ -26,6 +26,12 @@ import type {
 
 interface Props {
   windowLabel: string;
+  /** The active billing month the page is showing (e.g. '2026-06'). The
+   *  narrative tries to narrate THIS cycle. If it has no data yet (cycle
+   *  just opened), it falls back to the most recent bucket with data and
+   *  labels its bullets/subtitle with that month explicitly, so the user
+   *  doesn't read "החודש את במאזן חיובי" for a month they're not looking at. */
+  activeMonth: string;
   outliers: OutlierFinding[];
   drifts: RecurringDriftFinding[];
   phantoms: PhantomSubFinding[];
@@ -42,7 +48,17 @@ const INFO = `מה זה: סיפור קצר בנוגע לחודש שלך — הד
 בעתיד (פאזה E): המודל (Claude Sonnet) יחבר טקסט עשיר יותר תוך שימוש באותם נתונים בלבד. עד אז — המקור והדיוק מובטחים מלאים.`;
 
 export function NarrativeSummary(props: Props) {
-  const lines = composeStory(props);
+  const { lines, narratedMonth, isFallback } = composeStory(props);
+
+  // The subtitle shows the month being NARRATED (not necessarily the page's
+  // active window). When we fell back to a prior cycle (because the active
+  // cycle is empty), add a small hint so the reader doesn't mistake the
+  // bullet's numbers for the active window's numbers.
+  const subtitle = narratedMonth
+    ? isFallback
+      ? `החודש האחרון עם נתונים: ${narratedMonth}`
+      : `חודש ${narratedMonth}`
+    : props.windowLabel;
 
   return (
     <article
@@ -63,7 +79,7 @@ export function NarrativeSummary(props: Props) {
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold tracking-tight">סיכום החודש שלך</h2>
             <InfoModalButton title="סיכום החודש שלך" body={INFO} />
-            <span className="ms-auto text-2xs text-muted-foreground tabular-nums">{props.windowLabel}</span>
+            <span className="ms-auto text-2xs text-muted-foreground tabular-nums">{subtitle}</span>
           </div>
           <ul className="mt-3 space-y-2 text-sm leading-relaxed text-foreground/90">
             {lines.map((line, i) => (
@@ -79,9 +95,30 @@ export function NarrativeSummary(props: Props) {
   );
 }
 
+interface ComposedStory {
+  lines: string[];
+  /** YYYY-MM of the bucket whose data appears in the bullets, if any. Used
+   *  by the card to label the subtitle so the user knows which month the
+   *  narrative is actually about. */
+  narratedMonth: string | null;
+  /** True when the narrated month is NOT the page's active window — i.e. we
+   *  fell back to the most recent cycle with data. Drives a clarifying hint
+   *  ("החודש האחרון עם נתונים: ...") instead of plain "חודש ...". */
+  isFallback: boolean;
+}
+
 /**
  * Pure function: pick 2-4 noteworthy bullets, sorted by ROUGH severity.
  * Every fact comes from a query result — never invented.
+ *
+ * Month-resolution rule (added after the user noticed the narrative was
+ * citing last month's numbers under the current month's header):
+ *   1. Prefer the bucket matching the page's active billing month.
+ *   2. If that's empty (cycle just opened, no data yet), fall back to the
+ *      most recent non-empty bucket — but flag isFallback=true so the card
+ *      can label the subtitle clearly.
+ *   3. Every bullet that references a month uses the explicit YYYY-MM
+ *      instead of "החודש" — that word lies when fallback fires.
  */
 function composeStory({
   outliers,
@@ -91,19 +128,30 @@ function composeStory({
   momSpikes,
   income,
   untagged,
-}: Props): string[] {
+  activeMonth,
+}: Props): ComposedStory {
   const lines: string[] = [];
 
-  // (1) Net cash flow — frame the month
-  const latest = income[income.length - 1];
-  if (latest && (latest.incomeIls > 0 || latest.expensesIls > 0)) {
-    if (latest.netIls >= 0) {
+  // (1) Net cash flow — pick the bucket to narrate.
+  const hasData = (b: IncomeVsExpenseBucket) => b.incomeIls > 0 || b.expensesIls > 0;
+  const activeBucket = income.find((b) => b.month === activeMonth) ?? null;
+  const fallbackBucket =
+    activeBucket && hasData(activeBucket)
+      ? null
+      : [...income].reverse().find(hasData) ?? null;
+  const narrated = activeBucket && hasData(activeBucket) ? activeBucket : fallbackBucket;
+  const isFallback = !!fallbackBucket && narrated === fallbackBucket;
+  const narratedMonth = narrated?.month ?? null;
+
+  if (narrated) {
+    const monthLabel = narrated.month;
+    if (narrated.netIls >= 0) {
       lines.push(
-        `החודש את במאזן חיובי של ${formatIls(latest.netIls, { decimals: false })} — הכנסות (${formatIls(latest.incomeIls, { decimals: false })}) גבוהות מההוצאות.`,
+        `${isFallback ? `בחודש ${monthLabel}` : 'החודש'} את במאזן חיובי של ${formatIls(narrated.netIls, { decimals: false })} — הכנסות (${formatIls(narrated.incomeIls, { decimals: false })}) גבוהות מההוצאות.`,
       );
     } else {
       lines.push(
-        `החודש המאזן שלילי ב-${formatIls(Math.abs(latest.netIls), { decimals: false })} — את מוציאה יותר ממה שנכנס.`,
+        `${isFallback ? `בחודש ${monthLabel}` : 'החודש'} המאזן שלילי ב-${formatIls(Math.abs(narrated.netIls), { decimals: false })} — את מוציאה יותר ממה שנכנס.`,
       );
     }
   }
@@ -162,5 +210,5 @@ function composeStory({
   }
 
   // Cap at 4 lines so the card stays readable
-  return lines.slice(0, 4);
+  return { lines: lines.slice(0, 4), narratedMonth, isFallback };
 }

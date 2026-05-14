@@ -51,6 +51,23 @@ export function addMonths(yearMonth: string, n: number): string {
   return `${y}-${String(m).padStart(2, '0')}`;
 }
 
+/**
+ * Returns the **calendar** YYYY-MM in the given timezone — NOT a billing cycle.
+ *
+ * Despite the name, this helper has nothing to do with CC billing cycles. It
+ * was named "current billing month" historically because, for bank-direct
+ * (cutoff_day = 0) accounts, calendar month == billing month. For CC accounts
+ * with a cutoff day, the cutoff-aware version is {@link activeBillingMonth}.
+ *
+ * ⚠ Pick carefully — mixing these two helpers across cards on the same page
+ * has produced silent month-drift bugs (e.g. KPI strip reads activeBilling-
+ * Month while a sibling card reads currentBillingMonth, and they disagree
+ * past the cutoff day each month).
+ *
+ * For multi-card aggregation surfaces (e.g. /insights), the page should
+ * resolve ONE anchor month and pass it explicitly to every query. Do NOT
+ * call this helper inside per-card query functions.
+ */
 export function currentBillingMonth(now: Date = new Date(), tz = 'Asia/Jerusalem'): string {
   // Format using Israel timezone (assumes Node 22 with full ICU)
   const fmt = new Intl.DateTimeFormat('en-CA', {
@@ -67,13 +84,19 @@ export function currentBillingMonth(now: Date = new Date(), tz = 'Asia/Jerusalem
 /**
  * The billing-cycle month that "today" belongs to, accounting for the cutoff day.
  *
- * Differs from currentBillingMonth() when today is PAST the cutoff:
+ * Differs from {@link currentBillingMonth} when today is PAST the cutoff:
  *   - Apr 15, cutoff=10 → active billing month = May 2026 (transactions from Apr 15 will
  *     be charged on May 10, so they belong to the May billing cycle).
  *   - May 3, cutoff=10  → active billing month = May 2026 (day 3 ≤ 10, still in May cycle).
  *
- * Use this as the default month on the dashboard / transactions pages so the user
- * always lands on the billing cycle they're currently "living in".
+ * Use this as the default month on the dashboard / transactions / insights pages
+ * so the user always lands on the billing cycle they're currently "living in".
+ *
+ * ⚠ For multi-card aggregation surfaces (e.g. /insights), call this ONCE at
+ * the page level and pass the resolved string into every per-card query as
+ * an explicit `anchorMonth` parameter. Do NOT call this helper independently
+ * inside two sibling queries — they can drift if one of them accidentally
+ * grabs {@link currentBillingMonth} instead.
  */
 export function activeBillingMonth(
   cutoffDay: number = 10,

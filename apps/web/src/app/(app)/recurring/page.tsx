@@ -80,14 +80,54 @@ export default async function RecurringPage() {
     .where(eq(schema.notificationContacts.householdId, householdId))
     .orderBy(schema.notificationContacts.label);
 
-  // Summary tiles — sums for "active" patterns only
-  const active = patterns.filter((p) => p.status === 'active');
+  // ── Summary tile math ────────────────────────────────────────────────────
+  //
+  // We want every tile to answer the question "what's my fixed monthly cash
+  // flow right now". A few subtleties:
+  //
+  // 1. Non-monthly frequencies (bimonthly / quarterly / yearly) must be
+  //    amortized to a monthly equivalent. A ₪6,000/year subscription contri-
+  //    butes ₪500/month to monthly fixed expense. Previously the tiles hard-
+  //    filtered to `frequency === 'monthly'` and silently dropped everything
+  //    else — anything yearly was invisible.
+  //
+  // 2. Patterns whose `subscription_end_date` has already passed but are
+  //    still `status='active'` (user forgot to mark them ended) are NOT
+  //    really active any more — they shouldn't be summed. We exclude them
+  //    from BOTH the sums and the active count, so the count and the totals
+  //    refer to the same set of patterns.
+  //
+  // 3. Dynamic-amount patterns have expectedAmountIls=0 — they silently
+  //    contribute 0 to the sums. That's accepted (we surface their count in
+  //    a caption so the user knows a few patterns aren't measured here).
+  const todayIso = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date()); // YYYY-MM-DD
+
+  const FREQ_MONTHLY_FACTOR: Record<string, number> = {
+    monthly:   1,
+    bimonthly: 1 / 2,
+    quarterly: 1 / 3,
+    yearly:    1 / 12,
+  };
+  function monthlyAmountFor(p: typeof patterns[number]): number {
+    const factor = FREQ_MONTHLY_FACTOR[p.frequency] ?? 1;
+    return Math.abs(Number(p.expectedAmountIls)) * factor;
+  }
+  function isExpired(p: typeof patterns[number]): boolean {
+    return p.subscriptionEndDate != null && p.subscriptionEndDate < todayIso;
+  }
+
+  const dbActive    = patterns.filter((p) => p.status === 'active');
+  const active      = dbActive.filter((p) => !isExpired(p));
+  const dynamicCount = active.filter((p) => p.amountMode === 'dynamic').length;
+
   const monthlyExpense = active
-    .filter((p) => p.frequency === 'monthly' && Number(p.expectedAmountIls) < 0)
-    .reduce((s, p) => s + Math.abs(Number(p.expectedAmountIls)), 0);
+    .filter((p) => Number(p.expectedAmountIls) < 0)
+    .reduce((s, p) => s + monthlyAmountFor(p), 0);
   const monthlyIncome = active
-    .filter((p) => p.frequency === 'monthly' && Number(p.expectedAmountIls) > 0)
-    .reduce((s, p) => s + Number(p.expectedAmountIls), 0);
+    .filter((p) => Number(p.expectedAmountIls) > 0)
+    .reduce((s, p) => s + monthlyAmountFor(p), 0);
 
   return (
     <div className="space-y-6">
@@ -125,6 +165,11 @@ export default async function RecurringPage() {
               <Repeat className="size-4 text-muted-foreground" />
               {active.length}
             </p>
+            {dynamicCount > 0 && (
+              <p className="mt-0.5 text-[10px] text-muted-foreground/80">
+                {dynamicCount} בסכום דינמי · לא נכלל בסיכום
+              </p>
+            )}
           </div>
         </div>
       )}

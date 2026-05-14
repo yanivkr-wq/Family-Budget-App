@@ -67,6 +67,21 @@ export const searchMerchantsArgs = z
   })
   .strict();
 
+export const getWidgetSpecArgs = z
+  .object({
+    /** Stable widget id (e.g. 'hero-kpi', 'home.kpi.balance', 'installments.kpi.completed-count').
+     *  If omitted, returns a list of widgets (id + page + Hebrew title only). */
+    widget_id: z.string().min(1).max(120).optional(),
+    /** Optional page filter when listing widgets. Pass e.g. '/insights',
+     *  '/transactions'. If both widget_id and page_id are omitted, lists
+     *  every widget across every page. */
+    page_id: z.string().min(1).max(40).optional(),
+  })
+  .strict();
+
+/** @deprecated Renamed to getWidgetSpecArgs. Kept until callers migrate. */
+export const getInsightWidgetSpecArgs = getWidgetSpecArgs;
+
 export type QueryTransactionsArgs = z.infer<typeof queryTransactionsArgs>;
 export type GetCategorySummaryArgs = z.infer<typeof getCategorySummaryArgs>;
 export type CompareMonthsArgs = z.infer<typeof compareMonthsArgs>;
@@ -76,3 +91,6 @@ export type GetAnomaliesArgs = z.infer<typeof getAnomaliesArgs>;
 export type GetPredictedBalanceArgs = z.infer<typeof getPredictedBalanceArgs>;
 export type FindSubscriptionCandidatesArgs = z.infer<typeof findSubscriptionCandidatesArgs>;
 export type SearchMerchantsArgs = z.infer<typeof searchMerchantsArgs>;
+export type GetWidgetSpecArgs = z.infer<typeof getWidgetSpecArgs>;
+/** @deprecated Renamed to GetWidgetSpecArgs. */
+export type GetInsightWidgetSpecArgs = GetWidgetSpecArgs;

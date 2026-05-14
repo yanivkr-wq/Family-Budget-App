@@ -38,7 +38,7 @@ export default async function SignInPage(props: {
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-sm">
+      <div className="w-full max-w-sm rounded-2xl border bg-card p-6 shadow-sm">
         <h1 className="mb-1 text-2xl font-semibold">{he.app.name}</h1>
         <p className="mb-6 text-sm text-muted-foreground">{he.auth.signIn}</p>
 
@@ -92,14 +92,14 @@ export default async function SignInPage(props: {
           </div>
 
           {error && (
-            <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+            <p className="rounded-xl border border-destructive/30 bg-destructive-soft p-3 text-sm text-destructive">
               {he.auth.invalidCredentials}
             </p>
           )}
 
           <button
             type="submit"
-            className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            className="btn-primary w-full"
           >
             {he.auth.signIn}
           </button>

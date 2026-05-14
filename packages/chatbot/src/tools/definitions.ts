@@ -122,6 +122,30 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'get_widget_spec',
+    description:
+      'Authoritative metadata about every visible element on the app\'s pages — the contract the code enforces. Use this whenever the user asks how a widget/card/table/summary on any page works, what data source it pulls from (bank rows vs CC details vs other tables), what filters it applies, what time scope, what math rule, what gets excluded, or why a specific number is displayed. Quoting from the spec lets you answer with certainty instead of guessing from the rendered numbers. ' +
+      '\n\nUsage modes:\n' +
+      '- No arguments → returns the full list of widgets across every page (id + page + Hebrew/English title). Useful to discover what exists.\n' +
+      '- `page_id` only (e.g. "/", "/insights", "/transactions", "/recurring", "/installments", "/savings", "/projects") → returns the list scoped to one page. Use this when the user asks about "the dashboard" or "the transactions page" generally.\n' +
+      '- `widget_id` → returns the full structured spec for one widget: pageId, dataSource, dataSourceNotes, timeScope, filters[], mathRule, exclusions[], caveats, relatedWidgets[], queryFunction. THIS is what you quote to answer "does it include CC details" / "what time scope" / "how is the number computed" questions.\n' +
+      '\nKnown page ids: /, /insights, /transactions, /recurring, /installments, /savings, /projects.\n' +
+      'Common widget ids (non-exhaustive): home.kpi.spent-so-far, home.kpi.income, home.kpi.balance, home.kpi.cumulative-balance, home.charge-bar.already-charged, transactions.banner.current-cycle, transactions.controls.cc-view-toggle, recurring.kpi.monthly-expense, installments.kpi.completed-count, savings.monthly-rate.deposited, projects.detail.budget-progress-bar, hero-kpi, income-vs-expenses, recurring-drift, cc-settlement-mismatch. (Call without widget_id to see the full list.)',
+    input_schema: {
+      type: 'object',
+      properties: {
+        widget_id: {
+          type: 'string',
+          description: 'Optional stable widget id. Pass to fetch one widget\'s full spec.',
+        },
+        page_id: {
+          type: 'string',
+          description: 'Optional page filter for the list mode. Ignored when widget_id is set.',
+        },
+      },
+    },
+  },
 ];
 
 export type ToolName = (typeof TOOL_DEFINITIONS)[number]['name'];

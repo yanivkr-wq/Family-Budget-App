@@ -149,7 +149,7 @@ export default async function ProjectDetailPage(props: {
       return {
         name:  cat?.nameHe ?? 'ללא קטגוריה',
         value: v,
-        color: cat?.color ?? '#94a3b8',
+        color: cat?.color ?? 'hsl(var(--muted-foreground))',
       };
     })
     .sort((a, b) => b.value - a.value);

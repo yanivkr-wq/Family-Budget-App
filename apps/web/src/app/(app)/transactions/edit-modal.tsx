@@ -284,7 +284,7 @@ export function EditTransactionModal(props: {
               project-related purchases that should also affect this
               month's discretionary budget). */}
           {t.projectId && (
-            <label className="col-span-1 sm:col-span-2 flex items-start gap-2 rounded-md border border-amber-300/40 bg-amber-50/40 p-2.5 text-xs cursor-pointer dark:border-amber-700/40 dark:bg-amber-900/10">
+            <label className="col-span-1 sm:col-span-2 flex items-start gap-2 cursor-pointer rounded-xl border border-accent/20 bg-accent-soft/50 p-2.5 text-xs">
               <input
                 type="checkbox"
                 checked={includeInMonthlyOverride}
@@ -318,7 +318,7 @@ export function EditTransactionModal(props: {
                 • insights spending math
                 • category summaries / charts
               The row is still visible in lists for audit purposes. */}
-          <label className="col-span-1 sm:col-span-2 flex items-start gap-2 rounded-md border border-slate-300/40 bg-slate-50/40 p-2.5 text-xs cursor-pointer dark:border-slate-700/40 dark:bg-slate-900/10">
+          <label className="col-span-1 sm:col-span-2 flex items-start gap-2 cursor-pointer rounded-xl border bg-muted/30 p-2.5 text-xs">
             <input
               type="checkbox"
               checked={excludedFromTotals}

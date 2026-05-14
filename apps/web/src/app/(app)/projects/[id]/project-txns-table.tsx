@@ -119,7 +119,7 @@ export function ProjectTxnsTable({
                       <span>{t.merchant}</span>
                       {t.includeInMonthlyOverride && (
                         <span
-                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                          className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-medium text-accent"
                           title="התנועה כלולה גם בסיכומים החודשיים (הוצאה שוטפת בנוסף לחלקה בפרויקט)"
                         >
                           <CalendarCheck className="size-2.5" />
@@ -128,7 +128,7 @@ export function ProjectTxnsTable({
                       )}
                       {t.excludedFromTotals && (
                         <span
-                          className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                          className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground"
                           title="תנועה חשבונאית בלבד — מוצגת לתיעוד אך לא נספרת בסיכומי הפרויקט או החודשיים"
                         >
                           <CircleSlash className="size-2.5" />

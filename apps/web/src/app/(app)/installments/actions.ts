@@ -49,6 +49,14 @@ export async function createInstallmentPlan(fd: FormData): Promise<{ ok: boolean
 
     const projectedEndMonth = totalPayments ? addMonths(startMonth, totalPayments - 1) : null;
 
+    // Auto-complete: if the user is creating a plan that's already fully
+    // paid (currentNo >= totalPayments), treat status as 'complete'. Mirrors
+    // the read-path derivation in page.tsx so the DB doesn't drift.
+    // (Doesn't override an explicit 'cancelled' choice.)
+    const isFullyPaid = totalPayments !== null && currentNo >= totalPayments;
+    const finalStatus = isFullyPaid && status === 'active' ? 'complete' : status;
+    const actualEndMonth = finalStatus === 'complete' ? new Date().toISOString().slice(0, 7) : null;
+
     await db.insert(schema.installmentPlans).values({
       householdId,
       ...(accountId ? { accountId } : {}),
@@ -59,7 +67,8 @@ export async function createInstallmentPlan(fd: FormData): Promise<{ ok: boolean
       currentPaymentNo: currentNo,
       startMonth,
       ...(projectedEndMonth ? { projectedEndMonth } : {}),
-      status,
+      ...(actualEndMonth ? { actualEndMonth } : {}),
+      status: finalStatus,
       ...(notes ? { notes } : {}),
     });
 
@@ -91,7 +100,13 @@ export async function updateInstallmentPlan(fd: FormData): Promise<{ ok: boolean
     }
 
     const projectedEndMonth = totalPayments ? addMonths(startMonth, totalPayments - 1) : null;
-    const actualEndMonth    = status === 'complete' ? (new Date().toISOString().slice(0, 7)) : null;
+
+    // Auto-complete on save: same rule as createInstallmentPlan — a fully-
+    // paid plan should land in 'complete', not 'active'. Otherwise the user
+    // sees a "completed" row with an "active" status badge.
+    const isFullyPaid = totalPayments !== null && currentNo >= totalPayments;
+    const finalStatus = isFullyPaid && status === 'active' ? 'complete' : status;
+    const actualEndMonth = finalStatus === 'complete' ? (new Date().toISOString().slice(0, 7)) : null;
 
     await db
       .update(schema.installmentPlans)
@@ -105,7 +120,7 @@ export async function updateInstallmentPlan(fd: FormData): Promise<{ ok: boolean
         projectedEndMonth:  projectedEndMonth ?? null,
         actualEndMonth:     actualEndMonth ?? null,
         accountId:          accountId ?? null,
-        status,
+        status:             finalStatus,
         notes:              notes ?? null,
       })
       .where(and(

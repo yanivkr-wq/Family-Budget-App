@@ -84,6 +84,17 @@ export async function buildSystemPrompt(ctx: SystemPromptContext): Promise<strin
   lines.push('- Always pass real category IDs from the list below — never invent UUIDs.');
   lines.push('- For "this month" queries use billing_month (not date_from/date_to). The cutoff-day rule maps purchases after the cutoff to next month.');
   lines.push('');
+  lines.push('## Answering questions about page widgets, cards, tables, summaries');
+  lines.push('- The app has a structured spec registry covering every visible element on every page: /, /insights, /transactions, /recurring, /installments, /savings, /projects.');
+  lines.push('- When the user asks how ANY widget / card / table / summary / KPI tile works — what it shows, what data it uses, what filters or time scope it applies, what gets excluded, what the math is, or why a specific number is what it is — call `get_widget_spec` BEFORE answering.');
+  lines.push('- Discovery flow when you don\'t know which widget the user means:');
+  lines.push('  1. If the user names a page generically ("the dashboard", "the transactions page"), call `get_widget_spec` with `page_id` to list widgets on that page.');
+  lines.push('  2. If the user describes a widget vaguely ("the income tile", "the bar with refunds"), call `get_widget_spec` with no args to see EVERY widget id+title, then pick the best match.');
+  lines.push('  3. Once you have the right `widget_id`, call again to fetch the full structured spec (dataSource, dataSourceNotes, timeScope, filters, mathRule, exclusions, caveats, queryFunction).');
+  lines.push('- QUOTE from the spec — do not paraphrase. The spec is the contract the SQL enforces. Inferring widget behavior from rendered numbers is how you get things wrong.');
+  lines.push('- Recurring confusion worth remembering: TOTALS widgets (e.g. hero-kpi, income-vs-expenses, home.kpi.spent-so-far) read BANK ROWS ONLY. BEHAVIORAL widgets (e.g. category-by-charge-date, category-by-txn-date, foreign-currency) read CC DETAILS. The spec\'s `dataSource` field is the definitive answer per widget.');
+  lines.push('- After quoting the spec, use the other tools (query_transactions, get_category_summary, etc.) to fetch the actual rows that explain the user\'s specific number.');
+  lines.push('');
   lines.push(`## Current context`);
   lines.push(`- Today (Israel time): ${today}`);
   lines.push(`- Current billing month: ${month}`);

@@ -68,46 +68,68 @@ export function CardCcSettlementMismatch({ windowLabel, findings }: Props) {
           </span>
         </div>
 
-        <ul className="flex-1 space-y-2.5">
+        <ul className="flex-1 space-y-3">
           {[...byCc.entries()].slice(0, 3).map(([ccId, group]) => (
             <li key={ccId} className="space-y-1">
               <p className="truncate text-xs font-medium" title={group.name}>
                 {group.name}
               </p>
-              <ul className="space-y-1 ps-1">
-                {group.rows.slice(0, 3).map((r) => {
-                  // gap > 0 means details > settlement (extra detail rows that
-                  // shouldn't be there OR settlement under-reported)
-                  // gap < 0 means details < settlement (CC export is missing rows)
-                  const detailsLess = r.gap < 0;
-                  // Drill: filter transactions to that CC × billing month so the
-                  // user can scan the detail rows quickly. Billing month is
-                  // YYYY-MM; expand to a calendar month range.
-                  const [yStr, mStr] = r.billingMonth.split('-');
-                  const lastDay = new Date(Date.UTC(Number(yStr), Number(mStr), 0)).getUTCDate();
-                  const drill = `/transactions?accountId=${encodeURIComponent(r.ccAccountId)}&dateFrom=${r.billingMonth}-01&dateTo=${r.billingMonth}-${String(lastDay).padStart(2, '0')}`;
-                  return (
-                    <li key={`${ccId}-${r.billingMonth}`}>
-                      <Link
-                        href={drill}
-                        className="group block text-2xs -mx-1 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/40"
-                      >
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="text-muted-foreground tabular-nums group-hover:text-accent transition-colors">{r.billingMonth}</span>
-                          <span className="flex items-center gap-1 font-medium text-warning tabular-nums">
-                            {detailsLess ? <ArrowDown className="size-2.5" /> : <ArrowUp className="size-2.5" />}
-                            פער {formatIls(Math.abs(r.gap), { decimals: false })}
+              {/* ONE grid for header + all rows in this CC group — uses
+                  grid-cols-subgrid on every row so column widths come from
+                  the OUTER grid, not each row independently. Without subgrid,
+                  each row was its own grid; the 1fr columns sized off the
+                  per-row "פער" auto-column, which made "0 ₪" and "13,177 · 1 ₪"
+                  end at different X positions. */}
+              <div className="grid grid-cols-[auto_1fr_1fr_auto] gap-x-3 tabular-nums">
+                {/* Header strip — 9px inset so it lines up with the rows
+                    inside the 1px-bordered list below. */}
+                <div className="col-span-full grid grid-cols-subgrid px-[9px] text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                  <span>מחזור</span>
+                  <span className="text-end">חויב בבנק</span>
+                  <span className="text-end">פירוט CC</span>
+                  <span className="text-end">פער</span>
+                </div>
+                {/* Bordered row container — subgrid passes the outer columns
+                    through to each row, so every row uses the same widths. */}
+                <ul className="col-span-full grid grid-cols-subgrid divide-y divide-border/40 overflow-hidden rounded-lg border bg-card/50">
+                  {group.rows.slice(0, 3).map((r) => {
+                    // gap > 0 means details > settlement (extra detail rows that
+                    // shouldn't be there OR settlement under-reported)
+                    // gap < 0 means details < settlement (CC export is missing rows)
+                    const detailsLess = r.gap < 0;
+                    // Drill: filter transactions to that CC × billing month so the
+                    // user can scan the detail rows quickly. Billing month is
+                    // YYYY-MM; expand to a calendar month range.
+                    const [yStr, mStr] = r.billingMonth.split('-');
+                    const lastDay = new Date(Date.UTC(Number(yStr), Number(mStr), 0)).getUTCDate();
+                    const drill = `/transactions?accountId=${encodeURIComponent(r.ccAccountId)}&dateFrom=${r.billingMonth}-01&dateTo=${r.billingMonth}-${String(lastDay).padStart(2, '0')}`;
+                    return (
+                      <li key={`${ccId}-${r.billingMonth}`} className="col-span-full grid grid-cols-subgrid">
+                        <Link
+                          href={drill}
+                          className="group col-span-full grid grid-cols-subgrid items-baseline px-2 py-1.5 text-2xs transition-colors hover:bg-muted/40"
+                        >
+                          <span className="font-medium text-foreground group-hover:text-accent transition-colors">
+                            {r.billingMonth}
                           </span>
-                        </div>
-                        <div className="flex items-baseline justify-between gap-2 text-muted-foreground/80 tabular-nums">
-                          <span>פירוט {formatIls(r.detailsSum, { decimals: false })} ({r.detailsCount})</span>
-                          <span>בנק {formatIls(r.settlementSum, { decimals: false })} ({r.settlementCount})</span>
-                        </div>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+                          <span className="text-end">
+                            <span className="text-foreground/85">{formatIls(r.settlementSum, { decimals: false })}</span>
+                            <span className="text-muted-foreground/70"> · {r.settlementCount}</span>
+                          </span>
+                          <span className="text-end">
+                            <span className="text-foreground/85">{formatIls(r.detailsSum, { decimals: false })}</span>
+                            <span className="text-muted-foreground/70"> · {r.detailsCount}</span>
+                          </span>
+                          <span className="flex items-center justify-end gap-0.5 font-semibold text-warning">
+                            {detailsLess ? <ArrowDown className="size-2.5" /> : <ArrowUp className="size-2.5" />}
+                            {formatIls(Math.abs(r.gap), { decimals: false })}
+                          </span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             </li>
           ))}
         </ul>
