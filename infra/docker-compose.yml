@@ -3,21 +3,8 @@
 # Caddy is the only thing exposed to the internet (80/443).
 
 services:
-  caddy:
-    image: caddy:2.8-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # HTTP/3
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - web
-    networks:
-      - app
+  # Caddy removed — host-level Caddy (/etc/caddy/Caddyfile) now handles
+  # TLS + reverse-proxying for both budget and tasks apps.
 
   web:
     build:
@@ -34,6 +21,8 @@ services:
         condition: service_healthy
       worker:
         condition: service_started
+    ports:
+      - "127.0.0.1:3010:3000"
     networks:
       - app
 
@@ -88,8 +77,6 @@ networks:
     driver: bridge
 
 volumes:
-  caddy_data:
-  caddy_config:
   pg_data:
 
 secrets:

@@ -1,0 +1,27 @@
+# Budget app site block — installed to /etc/caddy/conf.d/budget.caddy
+#
+# Auto-issues a Let's Encrypt cert for budget.my-restart.co.il.
+
+budget.my-restart.co.il {
+    encode gzip zstd
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+
+    reverse_proxy 127.0.0.1:3010 {
+        flush_interval -1
+    }
+
+    log {
+        output file /var/log/caddy/budget.access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        format console
+    }
+}

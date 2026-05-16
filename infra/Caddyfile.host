@@ -1,0 +1,21 @@
+# Host-level Caddyfile — serves BOTH budget and tasks apps.
+#
+# Location on VPS: /etc/caddy/Caddyfile
+#
+# Each app has its own fragment in /etc/caddy/conf.d/:
+#   budget.caddy          — budget.my-restart.co.il → localhost:3010
+#   family-tasks-hub.caddy — tasks.my-restart.co.il  → localhost:3020 + 8090
+#
+# Caddy auto-issues Let's Encrypt certs for each domain.
+
+{
+    email admin@my-restart.co.il
+}
+
+# Import all site blocks from /etc/caddy/conf.d/
+import /etc/caddy/conf.d/*.caddy
+
+# Fallback: IP-only access → proxy to budget app so the old bookmark still works.
+:80 {
+    reverse_proxy 127.0.0.1:3010
+}
